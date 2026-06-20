@@ -1,0 +1,7 @@
+name: astrbot_plugin_agnes_image
+desc: Agnes AI 图像与视频生成插件，依据 Agnes 官方文档进行了原生适配以实现完全免费、较高质量的定制化生成体验，支持文生图、图生图以及视频生成。
+display_name: Agnes 图像与视频生成
+version: v2.0
+author: 往昔的涟漪
+repo: https://github.com/CyreneLian/astrbot_plugin_agnes_image
+astrbot_version: ">=4.16"
