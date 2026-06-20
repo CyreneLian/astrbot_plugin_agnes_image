@@ -781,8 +781,11 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
             except AgnesAPIError:
                 raise
             except Exception as e:
-                # 轮询时的网络异常可以忽略，继续下一次轮询；完成但字段异常会带着响应预览抛出并记录
-                logger.warning(f"[agnes] 轮询视频状态异常: {e}")
+                # 区分我们主动抛出的业务异常和网络异常
+                if "视频生成失败" in str(e) or "视频已完成，但未找到视频 URL" in str(e):
+                    raise
+                # 轮询时的网络异常可以忽略，继续下一次轮询
+                logger.warning(f"[agnes] 轮询视频状态网络异常: {e}")
                 
     raise Exception(
         "视频轮询超时：任务已提交且可能仍在 Agnes 后台排队/生成，"
