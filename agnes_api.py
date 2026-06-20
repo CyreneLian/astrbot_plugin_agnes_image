@@ -730,6 +730,17 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
         for value in candidates:
             if isinstance(value, str) and value.startswith("http"):
                 return value
+                
+        # 兜底：如果上面的字段都没命中，直接在整个 JSON 里找
+        raw_str = json.dumps(data)
+        import re
+        # 简单粗暴的正则，匹配 http 开头直到双引号或结束
+        matches = re.findall(r'https?://[^"]+', raw_str)
+        for m in matches:
+            if ".mp4" in m or "video" in m:
+                # 过滤掉一些明显不是真实视频地址的 API 接口
+                if "api" not in m and "webhook" not in m:
+                    return m
         return None
     
     async with aiohttp.ClientSession() as session:
@@ -755,8 +766,12 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
                     last_resp_preview = resp_text[:500]
                     video_url = _pick_video_url(data)
                     
-                    if video_url and status in ("", "completed", "complete", "succeeded", "success", "finished", "done"):
+                    # 只要拿到了合法的 video_url，不管 status 是什么（甚至 failed），都视为成功。
+                    # 因为部分 API 平台在生成完毕后，可能会因为回调或转码等周边服务报错，把最终状态写为 failed，
+                    # 但其实视频核心文件已经生成并返回了。
+                    if video_url:
                         return video_url, time.time() - start_time
+                        
                     if status in ("completed", "complete", "succeeded", "success", "finished", "done"):
                         raise Exception(f"视频已完成，但未找到视频 URL: {resp_text[:300]}")
                     elif status in ("failed", "error", "cancelled", "canceled"):
