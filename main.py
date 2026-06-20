@@ -704,9 +704,19 @@ class AgnesImagePlugin(Star):
                     logger.debug(f"[agnes] 清理临时文件失败（可忽略）: {e}")
 
         if send_error is not None:
-            yield event.plain_result(
-                f"❌ 图片发送失败: {type(send_error).__name__}: {send_error}"
-            )
+            err_type = type(send_error).__name__
+            err_text = str(send_error)
+            if "Timeout" in err_type:
+                msg = (
+                    f"❌ 图片发送超时，但已生成成功。\n"
+                    f"🖼️ 图片链接: {url}"
+                )
+            else:
+                msg = (
+                    f"❌ 图片发送失败: {err_type}: {err_text}\n"
+                    f"🖼️ 图片已生成成功，链接: {url}"
+                )
+            yield event.plain_result(msg)
             return
 
         line_parts = [
