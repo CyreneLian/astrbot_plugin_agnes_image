@@ -70,6 +70,159 @@ def _is_agnes_ai(api_base: str, model: str) -> bool:
 class AgnesImagePlugin(Star):
     """Agnes AI 图像生成插件"""
 
+    def _is_public_url(self, url: str) -> bool:
+        if not url:
+            return False
+        url_lower = url.lower()
+        if "127.0.0.1" in url_lower or "localhost" in url_lower or "/api/files/content" in url_lower or "/files/content" in url_lower or "qpic.cn" in url_lower or "gtimg.cn" in url_lower or "qq.com" in url_lower:
+            return False
+        return url_lower.startswith("http://") or url_lower.startswith("https://")
+
+    async def _upload_to_public_host(self, file_path: str) -> str:
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = aiohttp.FormData()
+                filename = os.path.basename(file_path)
+                with open(file_path, 'rb') as f:
+                    data.add_field('file', f, filename=filename)
+                    async with session.post('https://telegra.ph/upload', data=data) as resp:
+                        if resp.status == 200:
+                            res_json = await resp.json()
+                            if isinstance(res_json, list) and len(res_json) > 0 and 'src' in res_json[0]:
+                                return f"https://telegra.ph{res_json[0]['src']}"
+        except Exception as e:
+            logger.warning(f"[agnes] Telegraph 上传失败: {e}，尝试 Catbox...")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = aiohttp.FormData()
+                data.add_field('reqtype', 'fileupload')
+                with open(file_path, 'rb') as f:
+                    data.add_field('fileToUpload', f)
+                    async with session.post('https://catbox.moe/user/api.php', data=data) as resp:
+                        if resp.status == 200:
+                            res_text = await resp.text()
+                            if res_text.startswith("http"):
+                                return res_text.strip()
+        except Exception as e:
+            logger.error(f"[agnes] Catbox 上传也失败: {e}")
+        raise Exception("公网图床上传失败，请检查网络或代理设置。")
+
+    async def _upload_to_third_party(self, file_path: str, upload_url: str, token: str) -> str:
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = aiohttp.FormData()
+                filename = os.path.basename(file_path)
+                with open(file_path, 'rb') as f:
+                    data.add_field('image', f, filename=filename)
+                    headers = {}
+                    if token:
+                        headers['Authorization'] = f"Bearer {token}"
+                    params = {}
+                    if "imgbb" in upload_url.lower() and token:
+                        params['key'] = token
+                    
+                    async with session.post(upload_url, data=data, headers=headers, params=params) as resp:
+                        if resp.status == 200:
+                            res_json = await resp.json()
+                            found_url = self._find_url_in_json(res_json)
+                            if found_url:
+                                return found_url
+                            raise Exception(f"未在响应中找到图片 URL: {res_json}")
+                        else:
+                            raise Exception(f"HTTP {resp.status}: {await resp.text()}")
+        except Exception as e:
+            logger.error(f"[agnes] 第三方图床上传失败: {e}")
+            raise e
+
+    async def _extract_video_reference_images(self, event: AstrMessageEvent) -> tuple[list[str], list[str]]:
+        refs = []
+        notices = []
+        for comp in event.get_messages():
+            if not isinstance(comp, AstrImage):
+                continue
+
+            comp_url = (getattr(comp, "url", None) or "").strip()
+            if self._is_public_url(comp_url):
+                refs.append(comp_url)
+                continue
+
+            file_field = (getattr(comp, "file", None) or "").strip()
+            if self._is_public_url(file_field):
+                refs.append(file_field)
+                continue
+
+            method = self.config.get("video_img_handling_method", "free_public")
+
+            if method == "astrbot":
+                if file_field or comp_url:
+                    try:
+                        file_path = await comp.convert_to_file_path()
+                        from astrbot.core import file_token_service
+                        token = await file_token_service.register_file(file_path)
+
+                        base_url = self.config.get("video_file_service_base_url", "").strip().rstrip("/")
+                        if not base_url:
+                            from astrbot.core.config.config import astrbot_config
+                            base_url = astrbot_config.get("callback_api_base", "").strip().rstrip("/")
+
+                        if not base_url:
+                            raise Exception("未配置插件的“AstrBot文件服务公网地址”，且全局 callback_api_base 也为空")
+
+                        public_url = f"{base_url}/api/file/{token}"
+                        refs.append(public_url)
+                        logger.info(f"[agnes] 成功通过 AstrBot 本地文件服务生成公网链接: {public_url}")
+                        notices.append("🌸 已通过 AstrBot 文件服务成功生成参考图公网链接！")
+                        continue
+                    except Exception as e:
+                        logger.error(f"[agnes] 使用 AstrBot 本地文件服务转换失败: {e}")
+                        raise Exception(f"AstrBot 本地文件服务转换失败: {e}")
+
+            elif method == "third_party":
+                upload_url = self.config.get("third_party_upload_url", "").strip()
+                token = self.config.get("third_party_token", "").strip()
+                if file_field or comp_url:
+                    try:
+                        file_path = await comp.convert_to_file_path()
+                        if not upload_url:
+                            raise Exception("未配置第三方图床上传 API 地址")
+                        uploaded_url = await self._upload_to_third_party(file_path, upload_url, token)
+                        refs.append(uploaded_url)
+                        logger.info(f"[agnes] 成功将本地参考图上传至自定义第三方图床: {uploaded_url}")
+                        notices.append("🌸 已将本地参考图成功上传至第三方图床！")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"[agnes] 自定义第三方图床上传失败 ({e})，正在自动回退到免费公网图床...")
+                        try:
+                            file_path = await comp.convert_to_file_path()
+                            uploaded_url = await self._upload_to_public_host(file_path)
+                            refs.append(uploaded_url)
+                            logger.info(f"[agnes] 成功回退并上传至免费公网图床: {uploaded_url}")
+                            notices.append("🌸 已回退并将本地参考图成功上传至免费公网图床！")
+                            continue
+                        except Exception as fallback_err:
+                            logger.error(f"[agnes] 回退免费公网图床也失败了: {fallback_err}")
+
+            else:
+                if file_field or comp_url:
+                    try:
+                        file_path = await comp.convert_to_file_path()
+                        uploaded_url = await self._upload_to_public_host(file_path)
+                        refs.append(uploaded_url)
+                        logger.info(f"[agnes] 成功将本地参考图上传至免费公网图床: {uploaded_url}")
+                        notices.append("🌸 已将本地参考图成功上传至免费公网图床！")
+                        continue
+                    except Exception as e:
+                        logger.error(f"[agnes] 免费公网图床上传失败: {e}")
+
+            raise Exception(
+                "Agnes 视频生成只支持公网图片 URL。\n"
+                "插件尝试使用你选择的传输方式处理图片，但均未成功。\n"
+                "💡 建议：检查服务器网络、代理配置，或者直接在聊天框发送图片的公网链接（如 http://...）。"
+            )
+        return refs, notices
+    """Agnes AI 图像生成插件"""
+
     def __init__(self, context: Context, config: dict[str, Any]):
         super().__init__(context)
         self.config = config or {}
@@ -1061,14 +1214,26 @@ class AgnesImagePlugin(Star):
             yield event.plain_result("❌ 未配置 API Key，请在插件设置中填写。")
             return
 
-        # 提取参考图，如果存在则自动切换为图生视频
-        reference_images = await self._extract_reference_images(event)
-        is_img2img = len(reference_images) > 0
-
         # 视频配置
         video_model = self.config.get("video_model", "agnes-video-v2.0")
         video_duration = self.config.get("video_default_duration", "5s")
         video_output_format = self.config.get("video_output_format", "url")
+
+        # 1. 提取并转换参考图
+        try:
+            reference_images, convert_notices = await self._extract_video_reference_images(event)
+        except Exception as e:
+            logger.error(f"[agnes] 生视频提取参考图失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 生视频提取参考图失败: {e}")
+            return
+            
+        is_img2img = len(reference_images) > 0
+
+        # 2. 先提示调用与模式切换
+        if is_img2img:
+            yield event.plain_result("🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...")
+        else:
+            yield event.plain_result("🌸 正在调用Agnes生成视频...")
         
         # 内联选项校验与读取
         res = opts.get("res") or self.config.get("video_default_resolution", "720p")
@@ -1088,6 +1253,22 @@ class AgnesImagePlugin(Star):
             yield event.plain_result(f"❌ 不支持的长宽比: {ratio}。支持: 16:9/9:16/1:1/4:3/3:4")
             return
         
+        # 提前读取原始图片尺寸（防止 agnes_api 内部重复下载消耗一次性 Token）
+        img_w, img_h = None, None
+        if is_img2img and keep_original_size:
+            res = "keep"
+            original_paths = self._extract_reference_image_paths(event)
+            if original_paths:
+                dims = await self._read_image_dimensions(original_paths[0])
+                if dims:
+                    img_w, img_h = dims
+                    # 为了符合视频生成的常见要求，将宽高调整为16的倍数
+                    def adjust_to_16(val: int) -> int:
+                        return max(16, round(val / 16) * 16)
+                    img_w = adjust_to_16(img_w)
+                    img_h = adjust_to_16(img_h)
+                    logger.info(f"[agnes] 图生视频保留原尺寸，提前读取尺寸: {img_w}x{img_h}")
+        
         config = AgnesVideoRequestConfig(
             api_base=self.config.get("api_base", "https://apihub.agnes-ai.com/v1"),
             api_key=api_key,
@@ -1099,14 +1280,16 @@ class AgnesImagePlugin(Star):
             timeout=int(self.config.get("video_request_timeout", 300)),
             output_format=video_output_format,
             resolution=res,
-            aspect_ratio=ratio
+            aspect_ratio=ratio,
+            width=img_w,
+            height=img_h
         )
 
-        if is_img2img:
-            yield event.plain_result(f"🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待...")
-        else:
-            yield event.plain_result(f"🌸 正在调用Agnes生成视频...\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待...")
-
+        submit_lines: list[str] = []
+        submit_lines.extend(convert_notices)
+        submit_lines.append(f"⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待...")
+        await event.send(event.plain_result("\n".join(submit_lines)))
+        
         # 启动后台任务
         asyncio.create_task(self._run_video_task(event, config))
 
@@ -1240,28 +1423,29 @@ class AgnesImagePlugin(Star):
                 except Exception as e:
                     logger.debug(f"[agnes] 延迟清理视频临时文件异常: {e}")
 
+    @filter.command("Agnes帮助", alias={"agnes帮助"})
     async def cmd_help(self, event: AstrMessageEvent):
         """显示 Agnes 插件使用说明"""
         help_text = (
-            "🌸 **Agnes 图像与视频生成插件使用说明**\n\n"
-            "**📌 基础指令**\n"
-            "• `生图 <描述>`：根据描述生成图像\n"
-            "• `改图 <描述>`：回复一张或多张图片后再发「改图 描述」，进行图生图或多图合成\n"
-            "• `生视频 <描述>`：生成视频（回复图片时自动切换为图生视频）\n\n"
-            "**🎛 快捷中文参数**（直接连写在描述后即可）\n"
-            "• `尺寸1K/2K/4K` 或 `尺寸480p/720p/1080p`（视频）\n"
-            "• `比例16:9` / `比例1:1` 等\n"
-            "• `质量高/中/低/自动`（仅生图）\n"
-            "• `模型2.1` / `模型2.0`（仅生图）\n"
-            "• `保留原尺寸`（图生图/视频时保留参考图尺寸）\n\n"
-            "**✨ 示例**\n"
-            "• `生图 一只猫`\n"
-            "• `生图 赛博朋克城市夜景 尺寸4K 比例16:9 模型2.1`\n"
-            "• `改图 把它变成水彩画 比例1:1 质量高 保留原尺寸`\n"
-            "• `生视频 樱花飘落 尺寸1080p 比例16:9`\n\n"
-            "**💡 小贴士**\n"
-            "• 兼容原有的 `--res`、`--ratio` 等英文参数格式\n"
-            "• 配图为参考图时，`生图` 会自动切换为图生图，`生视频` 会自动切换为图生视频\n"
-            "• `4K` 仅支持 `agnes-image-2.1-flash` 模型\n"
+            "🌸 Agnes 图像与视频生成插件使用说明\n\n"
+            "📌 基础指令\n"
+            "• 生图 <描述>：根据描述生成图像\n"
+            "• 改图 <描述>：回复一张或多张图片后再发「改图 描述」，进行图生图或多图合成\n"
+            "• 生视频 <描述>：生成视频（回复图片时自动切换为图生视频）\n\n"
+            "🎛 快捷中文参数（直接连写在描述后即可）\n"
+            "• 尺寸1K/2K/4K 或 尺寸480p/720p/1080p（视频）\n"
+            "• 比例16:9 / 比例1:1 等\n"
+            "• 质量高/中/低/自动（仅生图）\n"
+            "• 模型2.1 / 模型2.0（仅生图）\n"
+            "• 保留原尺寸（图生图/视频时保留参考图尺寸）\n\n"
+            "✨ 示例\n"
+            "• 生图 一只猫\n"
+            "• 生图 赛博朋克城市夜景 尺寸4K 比例16:9 模型2.1\n"
+            "• 改图 把它变成水彩画 比例1:1 质量高 保留原尺寸\n"
+            "• 生视频 樱花飘落 尺寸1080p 比例16:9\n\n"
+            "💡 小贴士\n"
+            "• 兼容原有的 --res、--ratio 等英文参数格式\n"
+            "• 配图为参考图时，生图 会自动切换为图生图，生视频 会自动切换为图生视频\n"
+            "• 4K 仅支持 agnes-image-2.1-flash 模型\n"
         )
         yield event.plain_result(help_text)

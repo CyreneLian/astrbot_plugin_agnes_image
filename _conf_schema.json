@@ -78,17 +78,23 @@
     ],
     "default": "url"
   },
-  "request_timeout": {
+  "auto_threshold": {
     "type": "int",
-    "description": "图片 API 请求超时时间",
-    "hint": "生图请求的最大超时时间（单位：秒）。",
-    "default": 300
+    "description": "智能切换文件大小阈值 (MB)",
+    "hint": "当发送方式选择“智能切换”时，文件大小（图片或视频）小于该值时使用 base64 发送，大于等于该值时使用 file 发送。",
+    "default": 2
   },
   "keep_original_size": {
     "description": "改图时按参考图原比例生图",
     "type": "bool",
     "hint": "开启后，改图指令自动按第一张参考图的原宽高比生图（自动匹配最接近的预设比例）。",
     "default": true
+  },
+  "request_timeout": {
+    "type": "int",
+    "description": "图片 API 请求超时时间",
+    "hint": "生图请求的最大超时时间（单位：秒）。",
+    "default": 300
   },
   "video_model": {
     "type": "string",
@@ -144,22 +150,51 @@
     ],
     "default": "url"
   },
-  "video_request_timeout": {
-    "type": "int",
-    "description": "视频生成超时时间",
-    "hint": "视频生成及轮询的最大超时时间（单位：秒）。因为视频生成较慢，推荐设置 300 秒以上。",
-    "default": 1000
-  },
   "video_keep_original_size": {
     "type": "bool",
     "description": "图生视频时按参考图原尺寸生成",
     "hint": "开启后，图生视频指令自动读取第一张参考图的真实尺寸，并按 16 字节对齐后生成视频（覆盖默认视频分辨率和宽高比）。",
     "default": true
   },
-  "auto_threshold": {
+  "video_request_timeout": {
     "type": "int",
-    "description": "智能切换文件大小阈值 (MB)",
-    "hint": "当发送方式选择“智能切换”时，文件大小（图片或视频）小于该值时使用 base64 发送，大于等于该值时使用 file 发送。",
-    "default": 2
+    "description": "视频生成超时时间",
+    "hint": "视频生成及轮询的最大超时时间（单位：秒）。因为视频生成较慢，推荐设置 300 秒以上。",
+    "default": 1000
+  },
+  "video_img_handling_method": {
+    "type": "string",
+    "description": "本地图片传输方式",
+    "hint": "图生视频时，对本地图片的处理方式。astrbot: 使用 AstrBot 自带文件服务（推荐，需配置下方公网地址）；third_party: 自定义第三方图床（需填写下方 API 地址与 Token）；free_public: 免费公网图床（Telegraph/Catbox，无需配置）。",
+    "options": [
+      "astrbot",
+      "third_party",
+      "free_public"
+    ],
+    "default": "astrbot"
+  },
+  "video_enable_astrbot_file_magic": {
+    "type": "bool",
+    "description": "是否开启 AstrBot 文件服务永久链接补丁",
+    "default": true,
+    "hint": "选择 AstrBot 自带文件服务需开启此选项并且重启 astrbot，详见插件文档"
+  },
+  "video_file_service_base_url": {
+    "type": "string",
+    "description": "AstrBot文件服务公网地址",
+    "hint": "选择 astrbot 方式时，在此填写你面板的外网访问地址（如 http://你的IP:6185 或域名）。留空则自动读取 AstrBot 全局 callback_api_base 配置。",
+    "default": ""
+  },
+  "third_party_upload_url": {
+    "type": "string",
+    "description": "第三方图床上传 API 地址",
+    "hint": "选择 third_party 方式时填写。例如 SM.MS/S.EE: https://s.ee/api/v1/file/upload ；ImgBB: https://api.imgbb.com/1/upload",
+    "default": ""
+  },
+  "third_party_token": {
+    "type": "string",
+    "description": "第三方图床 Token",
+    "hint": "选择 third_party 方式时填写的 API Token / Key。",
+    "default": ""
   }
 }
