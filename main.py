@@ -12,6 +12,7 @@ import asyncio
 import base64 as _b64
 import shlex
 import tempfile
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,9 @@ _PLUGIN_NAME = "astrbot_plugin_agnes_image"
 _CACHE_SUBDIR = "cache"
 # 启动时清理超过 1 小时的临时文件
 _CACHE_MAX_AGE_SECONDS = 3600
+
+# AstrBot 文件服务补丁状态：让 /api/file/<token> 在有效期内可被 Agnes 预检和生成阶段重复访问。
+_AGNES_FILE_SERVICE_MAGIC_PATCHED = False
 
 
 # Agnes 支持的图像生成模型（来自 /v1/models 实测，仅保留生图模型）
@@ -230,6 +234,60 @@ class AgnesImagePlugin(Star):
 
     # ===== 生命周期 =====
 
+    def _install_astrbot_file_service_magic(self):
+        """让 AstrBot 文件服务 token 在有效期内可重复访问。
+
+        AstrBot 原生 FileTokenService.handle_file() 会在第一次访问时 pop 掉 token。
+        Agnes-Video-V2.0 在图生视频时可能先进行轻量预检，再由生成后端真正下载图片；
+        如果 token 被预检消耗，后续下载会拿到 404 HTML，进而导致 Internal generation failed。
+        """
+        global _AGNES_FILE_SERVICE_MAGIC_PATCHED
+
+        if _AGNES_FILE_SERVICE_MAGIC_PATCHED:
+            logger.info("[agnes] AstrBot 文件服务可重复访问补丁已安装，跳过重复安装")
+            return
+
+        if not self.config.get("video_enable_astrbot_file_magic", True):
+            logger.info("[agnes] AstrBot 文件服务可重复访问补丁未启用")
+            return
+
+        try:
+            from astrbot.core import file_token_service
+
+            if getattr(file_token_service, "_agnes_magic_patched", False):
+                _AGNES_FILE_SERVICE_MAGIC_PATCHED = True
+                logger.info("[agnes] AstrBot 文件服务可重复访问补丁已存在")
+                return
+
+            original_handle_file = file_token_service.handle_file
+
+            async def agnes_repeatable_handle_file(file_token: str) -> str:
+                async with file_token_service.lock:
+                    await file_token_service._cleanup_expired_tokens()
+
+                    if file_token not in file_token_service.staged_files:
+                        raise KeyError(f"无效或过期的文件 token: {file_token}")
+
+                    file_path, expire_time = file_token_service.staged_files[file_token]
+                    if time.time() > expire_time:
+                        file_token_service.staged_files.pop(file_token, None)
+                        raise KeyError(f"无效或过期的文件 token: {file_token}")
+
+                    if not os.path.exists(file_path):
+                        file_token_service.staged_files.pop(file_token, None)
+                        raise FileNotFoundError(f"文件不存在: {file_path}")
+
+                    # 关键：不 pop token，让 Agnes 的预检请求和实际生成下载都能在有效期内读取同一文件。
+                    return file_path
+
+            file_token_service._agnes_original_handle_file = original_handle_file
+            file_token_service.handle_file = agnes_repeatable_handle_file
+            file_token_service._agnes_magic_patched = True
+            _AGNES_FILE_SERVICE_MAGIC_PATCHED = True
+            logger.info("[agnes] 已安装 AstrBot 文件服务可重复访问补丁：/api/file token 有效期内不会因首次访问失效")
+        except Exception as e:
+            logger.error(f"[agnes] 安装 AstrBot 文件服务可重复访问补丁失败: {e}", exc_info=True)
+
     async def initialize(self):
         """插件加载：准备 cache 目录并清理历史临时文件。"""
         try:
@@ -247,6 +305,7 @@ class AgnesImagePlugin(Star):
         # 启动时清理超过 1 小时的临时文件（兜底）
         self._purge_stale_cache()
         logger.info(f"[agnes] cache 目录就绪: {self._cache_dir}")
+        self._install_astrbot_file_service_magic()
 
     async def terminate(self):
         """插件卸载：关闭长连接 session。"""

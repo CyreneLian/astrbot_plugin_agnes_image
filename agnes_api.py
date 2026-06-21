@@ -652,6 +652,7 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
     """
     payload = _build_video_payload(config)
     endpoint = config.api_base.rstrip("/") + "/videos"
+
     
     headers = {
         "Authorization": f"Bearer {config.api_key}",
@@ -684,19 +685,35 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
             raise Exception(f"提交视频任务请求失败: {e}")
             
     # 2. 轮询结果
-    # 优先使用 /videos/{task_id} 标准轮询接口。旧的 /agnesapi?video_id=... 容易返回非最终状态或字段不稳定，
-    # 会导致任务明明完成却一直等到超时。
-    poll_id = task_id or video_id
-    poll_endpoint = config.api_base.rstrip("/") + f"/videos/{poll_id}"
+    # Agnes-Video-V2.0 官方文档推荐使用 /agnesapi?video_id=... 查询最终结果；
+    # /v1/videos/{task_id} 仅作为兼容旧方式兜底。
+    from urllib.parse import quote
+    poll_endpoints: list[str] = []
+    api_root = config.api_base.rstrip("/")
+    if api_root.endswith("/v1"):
+        api_root = api_root[:-3]
+    if video_id:
+        poll_endpoints.append(
+            f"{api_root}/agnesapi?video_id={quote(video_id, safe='')}&model_name={quote(config.model, safe='')}"
+        )
+    if task_id:
+        poll_endpoints.append(config.api_base.rstrip("/") + f"/videos/{task_id}")
+    elif video_id:
+        poll_endpoints.append(config.api_base.rstrip("/") + f"/videos/{video_id}")
+    if not poll_endpoints:
+        raise Exception("提交视频任务失败，未获得可轮询的 task_id/video_id")
         
     max_wait = config.timeout
     last_status = "unknown"
     last_progress: Any = None
     last_error: Any = None
     last_resp_preview = ""
+    last_poll_endpoint = poll_endpoints[0]
     
     def _pick_video_url(data: dict[str, Any]) -> str | None:
         candidates = [
+            # Agnes-Video-V2.0 官方文档：completed 后最终视频 URL 位于 remixed_from_video_id
+            data.get("remixed_from_video_id"),
             data.get("url"),
             data.get("video_url"),
             data.get("output_url"),
@@ -707,6 +724,7 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
         output = data.get("output") or data.get("result") or data.get("data")
         if isinstance(output, dict):
             candidates.extend([
+                output.get("remixed_from_video_id"),
                 output.get("url"),
                 output.get("video_url"),
                 output.get("output_url"),
@@ -718,6 +736,7 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
             for item in output:
                 if isinstance(item, dict):
                     candidates.extend([
+                        item.get("remixed_from_video_id"),
                         item.get("url"),
                         item.get("video_url"),
                         item.get("output_url"),
@@ -737,55 +756,59 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
         # 简单粗暴的正则，匹配 http 开头直到双引号或结束
         matches = re.findall(r'https?://[^"]+', raw_str)
         for m in matches:
-            if ".mp4" in m or "video" in m:
-                # 过滤掉一些明显不是真实视频地址的 API 接口
-                if "api" not in m and "webhook" not in m:
-                    return m
+            # 优先接受真实 mp4 文件地址。注意 platform-outputs.agnes-ai.space
+            # 域名本身包含 "agnes-ai"，不能用 "api" 子串粗暴过滤。
+            if ".mp4" in m:
+                return m
+            if "video" in m and "webhook" not in m:
+                return m
         return None
     
     async with aiohttp.ClientSession() as session:
         while time.time() - start_time < max_wait:
             await asyncio.sleep(5)  # 官方推荐 5s 轮询间隔
-            try:
-                async with session.get(
-                    poll_endpoint,
-                    headers=headers,
-                    proxy=config.proxy,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    resp_text = await resp.text()
-                    if resp.status != 200:
-                        logger.warning(f"[agnes] 轮询视频状态 HTTP {resp.status}: {resp_text}")
-                        continue
+            for poll_endpoint in poll_endpoints:
+                last_poll_endpoint = poll_endpoint
+                try:
+                    async with session.get(
+                        poll_endpoint,
+                        headers=headers,
+                        proxy=config.proxy,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as resp:
+                        resp_text = await resp.text()
+                        if resp.status != 200:
+                            logger.warning(f"[agnes] 轮询视频状态 HTTP {resp.status}: {resp_text}")
+                            continue
+                            
+                        data = json.loads(resp_text)
+                        status = (data.get("status") or data.get("state") or "").lower()
+                        last_status = status or "unknown"
+                        last_progress = data.get("progress")
+                        last_error = data.get("error") or data.get("message") or data.get("detail")
+                        last_resp_preview = resp_text[:500]
+                        video_url = _pick_video_url(data)
                         
-                    data = json.loads(resp_text)
-                    status = (data.get("status") or data.get("state") or "").lower()
-                    last_status = status or "unknown"
-                    last_progress = data.get("progress")
-                    last_error = data.get("error") or data.get("message") or data.get("detail")
-                    last_resp_preview = resp_text[:500]
-                    video_url = _pick_video_url(data)
-                    
-                    # 只要拿到了合法的 video_url，不管 status 是什么（甚至 failed），都视为成功。
-                    # 因为部分 API 平台在生成完毕后，可能会因为回调或转码等周边服务报错，把最终状态写为 failed，
-                    # 但其实视频核心文件已经生成并返回了。
-                    if video_url:
-                        return video_url, time.time() - start_time
-                        
-                    if status in ("completed", "complete", "succeeded", "success", "finished", "done"):
-                        raise Exception(f"视频已完成，但未找到视频 URL: {resp_text[:300]}")
-                    elif status in ("failed", "error", "cancelled", "canceled"):
-                        err = data.get("error") or data.get("message") or data.get("detail") or "Unknown error"
-                        raise Exception(f"视频生成失败: {err}")
-                    # queued / pending / in_progress / processing / running 继续等待
-            except AgnesAPIError:
-                raise
-            except Exception as e:
-                # 区分我们主动抛出的业务异常和网络异常
-                if "视频生成失败" in str(e) or "视频已完成，但未找到视频 URL" in str(e):
+                        # 只要拿到了合法的 video_url，不管 status 是什么（甚至 failed），都视为成功。
+                        # 因为部分 API 平台在生成完毕后，可能会因为回调或转码等周边服务报错，把最终状态写为 failed，
+                        # 但其实视频核心文件已经生成并返回了。
+                        if video_url:
+                            return video_url, time.time() - start_time
+                            
+                        if status in ("completed", "complete", "succeeded", "success", "finished", "done"):
+                            raise Exception(f"视频已完成，但未找到视频 URL: {resp_text[:300]}")
+                        elif status in ("failed", "error", "cancelled", "canceled"):
+                            err = data.get("error") or data.get("message") or data.get("detail") or "Unknown error"
+                            raise Exception(f"视频生成失败: {err}")
+                        # queued / pending / in_progress / processing / running 继续等待；继续尝试下一个兼容轮询接口
+                except AgnesAPIError:
                     raise
-                # 轮询时的网络异常可以忽略，继续下一次轮询
-                logger.warning(f"[agnes] 轮询视频状态网络异常: {e}")
+                except Exception as e:
+                    # 区分我们主动抛出的业务异常和网络异常
+                    if "视频生成失败" in str(e) or "视频已完成，但未找到视频 URL" in str(e):
+                        raise
+                    # 轮询时的网络异常可以忽略，继续下一次轮询接口或下一轮
+                    logger.warning(f"[agnes] 轮询视频状态网络异常: {e}")
                 
     raise Exception(
         "视频轮询超时：任务已提交且可能仍在 Agnes 后台排队/生成，"
@@ -793,6 +816,6 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
         f"等待 {max_wait} 秒仍未拿到最终视频链接；"
         f"task_id={task_id or 'N/A'}；video_id={video_id or 'N/A'}；"
         f"最后状态={last_status}；进度={last_progress if last_progress is not None else 'N/A'}；"
-        f"最后错误={last_error or 'N/A'}；最后轮询接口={poll_endpoint}；"
-        f"最后响应预览={last_resp_preview}"
+        f"最后错误={last_error or 'N/A'}；"
+        f"最后轮询接口={last_poll_endpoint}；最后响应预览={last_resp_preview}"
     )
