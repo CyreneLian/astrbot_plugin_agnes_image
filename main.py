@@ -889,6 +889,7 @@ class AgnesImagePlugin(Star):
         yield event.plain_result(" | ".join(line_parts))
 
     def _format_error_message(
+        self,
         exc: BaseException,
         api_latency: float = 0.0,
         retries: int = 0,
@@ -1032,7 +1033,7 @@ class AgnesImagePlugin(Star):
                 return
 
             if ref_images:
-                yield event.plain_result("🎨 检测到参考图，自动切换为图生图模式...\n🎨 正在调用 Agnes 进行图生图...")
+                yield event.plain_result("🔍 检测到参考图，自动切换为图生图模式...\n🎨 正在调用 Agnes 进行图生图...")
             else:
                 yield event.plain_result("🎨 正在调用 Agnes 生成图像...")
 
