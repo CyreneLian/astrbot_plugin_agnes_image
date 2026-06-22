@@ -74,6 +74,19 @@ def _is_agnes_ai(api_base: str, model: str) -> bool:
 class AgnesImagePlugin(Star):
     """Agnes AI 图像生成插件"""
 
+    def _get_all_message_components(self, event: AstrMessageEvent) -> list[BaseMessageComponent]:
+        """获取所有消息组件，若包含引用回复 (Reply)，则将 Reply.chain 中的组件优先放在最前面合并返回。"""
+        from astrbot.core.message.components import Reply
+        reply_comps = []
+        normal_comps = []
+        for comp in event.get_messages():
+            if isinstance(comp, Reply) and comp.chain:
+                for sub in comp.chain:
+                    reply_comps.append(sub)
+            else:
+                normal_comps.append(comp)
+        return reply_comps + normal_comps
+
     def _is_public_url(self, url: str) -> bool:
         if not url:
             return False
@@ -139,21 +152,35 @@ class AgnesImagePlugin(Star):
             logger.error(f"[agnes] 第三方图床上传失败: {e}")
             raise e
 
-    async def _extract_video_reference_images(self, event: AstrMessageEvent) -> tuple[list[str], list[str]]:
+    async def _extract_video_reference_images(self, event: AstrMessageEvent) -> tuple[list[str], list[str], str | None, list[tuple[int, int] | None]]:
         refs = []
         notices = []
-        for comp in event.get_messages():
+        status: str | None = None
+        dims_list: list[tuple[int, int] | None] = []
+        for comp in self._get_all_message_components(event):
             if not isinstance(comp, AstrImage):
                 continue
 
             comp_url = (getattr(comp, "url", None) or "").strip()
             if self._is_public_url(comp_url):
                 refs.append(comp_url)
+                try:
+                    local_path = await comp.convert_to_file_path()
+                    dims = await self._read_image_dimensions(local_path)
+                except Exception:
+                    dims = await self._read_image_dimensions(comp_url)
+                dims_list.append(dims)
                 continue
 
             file_field = (getattr(comp, "file", None) or "").strip()
             if self._is_public_url(file_field):
                 refs.append(file_field)
+                try:
+                    local_path = await comp.convert_to_file_path()
+                    dims = await self._read_image_dimensions(local_path)
+                except Exception:
+                    dims = await self._read_image_dimensions(file_field)
+                dims_list.append(dims)
                 continue
 
             method = self.config.get("video_img_handling_method", "free_public")
@@ -175,8 +202,11 @@ class AgnesImagePlugin(Star):
 
                         public_url = f"{base_url}/api/file/{token}"
                         refs.append(public_url)
+                        dims = await self._read_image_dimensions(file_path)
+                        dims_list.append(dims)
                         logger.info(f"[agnes] 成功通过 AstrBot 本地文件服务生成公网链接: {public_url}")
                         notices.append("🌸 已通过 AstrBot 文件服务成功生成参考图公网链接！")
+                        status = "astrbot"
                         continue
                     except Exception as e:
                         logger.error(f"[agnes] 使用 AstrBot 本地文件服务转换失败: {e}")
@@ -192,8 +222,11 @@ class AgnesImagePlugin(Star):
                             raise Exception("未配置第三方图床上传 API 地址")
                         uploaded_url = await self._upload_to_third_party(file_path, upload_url, token)
                         refs.append(uploaded_url)
+                        dims = await self._read_image_dimensions(file_path)
+                        dims_list.append(dims)
                         logger.info(f"[agnes] 成功将本地参考图上传至自定义第三方图床: {uploaded_url}")
                         notices.append("🌸 已将本地参考图成功上传至第三方图床！")
+                        status = "third_party"
                         continue
                     except Exception as e:
                         logger.warning(f"[agnes] 自定义第三方图床上传失败 ({e})，正在自动回退到免费公网图床...")
@@ -201,8 +234,11 @@ class AgnesImagePlugin(Star):
                             file_path = await comp.convert_to_file_path()
                             uploaded_url = await self._upload_to_public_host(file_path)
                             refs.append(uploaded_url)
+                            dims = await self._read_image_dimensions(file_path)
+                            dims_list.append(dims)
                             logger.info(f"[agnes] 成功回退并上传至免费公网图床: {uploaded_url}")
                             notices.append("🌸 已回退并将本地参考图成功上传至免费公网图床！")
+                            status = "fallback_public"
                             continue
                         except Exception as fallback_err:
                             logger.error(f"[agnes] 回退免费公网图床也失败了: {fallback_err}")
@@ -213,8 +249,11 @@ class AgnesImagePlugin(Star):
                         file_path = await comp.convert_to_file_path()
                         uploaded_url = await self._upload_to_public_host(file_path)
                         refs.append(uploaded_url)
+                        dims = await self._read_image_dimensions(file_path)
+                        dims_list.append(dims)
                         logger.info(f"[agnes] 成功将本地参考图上传至免费公网图床: {uploaded_url}")
                         notices.append("🌸 已将本地参考图成功上传至免费公网图床！")
+                        status = "public"
                         continue
                     except Exception as e:
                         logger.error(f"[agnes] 免费公网图床上传失败: {e}")
@@ -224,7 +263,7 @@ class AgnesImagePlugin(Star):
                 "插件尝试使用你选择的传输方式处理图片，但均未成功。\n"
                 "💡 建议：检查服务器网络、代理配置，或者直接在聊天框发送图片的公网链接（如 http://...）。"
             )
-        return refs, notices
+        return refs, notices, status, dims_list
     """Agnes AI 图像生成插件"""
 
     def __init__(self, context: Context, config: dict[str, Any]):
@@ -370,7 +409,7 @@ class AgnesImagePlugin(Star):
     ) -> list[str]:
         """从消息中提取参考图，优先保留公网 URL，否则规范化为 data URI"""
         refs: list[str] = []
-        for comp in event.get_messages():
+        for comp in self._get_all_message_components(event):
             if not isinstance(comp, AstrImage):
                 continue
             
@@ -416,7 +455,7 @@ class AgnesImagePlugin(Star):
         返回原始字符串列表，方便后续读取尺寸等元数据。
         """
         paths: list[str] = []
-        for comp in event.get_messages():
+        for comp in self._get_all_message_components(event):
             if not isinstance(comp, AstrImage):
                 continue
             file_field = (getattr(comp, "file", None) or "").strip()
@@ -433,6 +472,8 @@ class AgnesImagePlugin(Star):
             from PIL import Image
             import io as _io
             import base64 as _b64_local
+            import urllib.request
+            import asyncio
 
             s = (image_input or "").strip()
             if not s:
@@ -452,31 +493,58 @@ class AgnesImagePlugin(Star):
                 except Exception:
                     raw_bytes = None
 
-            # 3. 裸本地路径
-            elif s.startswith("/") or (len(s) >= 3 and s[1] == ":" and s[2] in ("/", "\\")):
-                path = Path(s)
-                if path.is_file():
-                    img = Image.open(path)
-                    return img.size  # (width, height)
-
-            # 4. file://
+            # 3. file:// 前缀
             elif s.startswith("file://"):
-                path = Path(s[len("file://"):])
-                if path.is_file():
-                    img = Image.open(path)
-                    return img.size
+                try:
+                    path_str = urllib.request.url2pathname(s[len("file://"):])
+                    if os.name == 'nt' and path_str.startswith('/') and path_str[2] == ':':
+                        path_str = path_str[1:]
+                    path = Path(path_str)
+                    
+                    # 针对可能存在的竞态下载，加入重试读取机制
+                    for retry in range(3):
+                        if path.is_file() and path.stat().st_size > 0:
+                            try:
+                                img = Image.open(path)
+                                return img.size
+                            except Exception:
+                                pass
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.debug(f"[agnes] 解析 file:// 路径失败: {e}")
 
-            # 5. http(s)://
+            # 4. http(s):// （加入 User-Agent 头部防盗链）
             elif s.startswith(("http://", "https://")):
                 try:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    }
                     async with aiohttp.ClientSession(
-                        timeout=aiohttp.ClientTimeout(total=20)
+                        timeout=aiohttp.ClientTimeout(total=20),
+                        headers=headers
                     ) as session:
                         async with session.get(s) as resp:
                             if resp.status == 200:
                                 raw_bytes = await resp.read()
+                            else:
+                                logger.warning(f"[agnes] 下载参考图以读尺寸失败，HTTP 状态码: {resp.status}")
                 except Exception as e:
                     logger.warning(f"[agnes] 下载参考图以读尺寸失败: {e}")
+
+            # 5. 裸本地路径兜底
+            else:
+                try:
+                    path = Path(s)
+                    for retry in range(3):
+                        if path.is_file() and path.stat().st_size > 0:
+                            try:
+                                img = Image.open(path)
+                                return img.size
+                            except Exception:
+                                pass
+                        await asyncio.sleep(0.5)
+                except Exception:
+                    pass
 
             # 6. 裸 base64 兜底
             if raw_bytes is None:
@@ -491,7 +559,7 @@ class AgnesImagePlugin(Star):
             img = Image.open(_io.BytesIO(raw_bytes))
             return img.size  # (width, height)
         except Exception as e:
-            logger.warning(f"[agnes] 读取图片尺寸失败: {e}")
+            logger.warning(f"[agnes] 读取图片尺寸异常: {type(e).__name__}: {e}, 输入参数为: {image_input}")
             return None
 
     @staticmethod
@@ -511,10 +579,10 @@ class AgnesImagePlugin(Star):
         return w_r, h_r
 
     @staticmethod
-    def _compute_aspect_ratio(w: int, h: int) -> str | None:
+    def _compute_aspect_ratio(w: int, h: int, candidate_ratios: list[str] | None = None) -> str | None:
         """根据图片宽高找出最接近的预设长宽比字符串。
 
-        化简 (w, h) → (rw, rh)，与 PRESET_ASPECT_RATIOS 里所有比例比小数，
+        化简 (w, h) → (rw, rh)，与候选比例里所有比例比小数，
         返回差距最小的预设。失败返回 None。
         """
         if w <= 0 or h <= 0:
@@ -526,16 +594,20 @@ class AgnesImagePlugin(Star):
         target = rw / rh
         best: str | None = None
         best_diff = float("inf")
-        for ratio in PRESET_ASPECT_RATIOS:
-            a, b = ratio.split(":")
-            a_i, b_i = int(a), int(b)
-            if a_i <= 0 or b_i <= 0:
+        ratios_to_use = candidate_ratios if candidate_ratios is not None else PRESET_ASPECT_RATIOS
+        for ratio in ratios_to_use:
+            try:
+                a, b = ratio.split(":")
+                a_i, b_i = int(a), int(b)
+                if a_i <= 0 or b_i <= 0:
+                    continue
+                v = a_i / b_i
+                diff = abs(v - target)
+                if diff < best_diff:
+                    best_diff = diff
+                    best = ratio
+            except Exception:
                 continue
-            v = a_i / b_i
-            diff = abs(v - target)
-            if diff < best_diff:
-                best_diff = diff
-                best = ratio
         return best
 
     async def _normalize_image_to_data_uri(self, image_input: str) -> str:
@@ -643,7 +715,7 @@ class AgnesImagePlugin(Star):
     def _parse_options(self, raw: str) -> dict[str, Any]:
         """
         解析 prompt 中的内联选项，支持中文连写格式，如：
-          生图 一只猫 尺寸2K 比例16:9 质量高 模型2.1 保留原尺寸
+          生图 一只猫 尺寸2K 比例16:9 质量高 模型2.1 保留原比例
         同时也向下兼容原有的 --key value 格式。
         """
         # 中文别名映射表
@@ -674,9 +746,9 @@ class AgnesImagePlugin(Star):
             "keep-size": "keep_size",
             "same_size": "keep_size",
             "samesize": "keep_size",
-            "保留原尺寸": "keep_size",
+            "保留原比例": "keep_size",
             "保留尺寸": "keep_size",
-            "原尺寸": "keep_size",
+            "原比例": "keep_size",
             "原比例": "keep_size",
         }
 
@@ -939,13 +1011,7 @@ class AgnesImagePlugin(Star):
         if send_info:
             line_parts.append(send_info)
 
-        if usage.get("total_tokens"):
-            line_parts.append(
-                f"Token {usage['total_tokens']}"
-                f"（输入 {usage.get('prompt_tokens', 0)} "
-                f"/ 输出 {usage.get('completion_tokens', 0)}）"
-            )
-        yield event.plain_result(" | ".join(line_parts))
+        await event.send(MessageEventResult().message(" | ".join(line_parts)))
 
     def _format_error_message(
         self,
@@ -1078,6 +1144,11 @@ class AgnesImagePlugin(Star):
                 yield event.plain_result("❌ 尚未配置 api_key，请先在插件配置中填写 Agnes AI 密钥。")
                 return
 
+            # 校验时把 keep_size 弹出（不是值选项）
+            inline_keep = bool(opts.pop("keep_size", False))
+            config_keep = bool(self.config.get("keep_original_size", False))
+            keep_size = inline_keep or config_keep
+
             err = self._validate_inline_opts(opts)
             if err:
                 yield event.plain_result(err)
@@ -1091,8 +1162,68 @@ class AgnesImagePlugin(Star):
                 yield event.plain_result(f"❌ 生图提取参考图失败: {type(e).__name__}: {e}")
                 return
 
+            keep_aspect_ratio: str | None = None
             if ref_images:
                 yield event.plain_result("🔍 检测到参考图，自动切换为图生图模式...\n🎨 正在调用 Agnes 进行图生图...")
+                
+                # 生图（图生图）保留比例逻辑
+                if keep_size:
+                    first_image = None
+                    for comp in self._get_all_message_components(event):
+                        if isinstance(comp, AstrImage):
+                            first_image = comp
+                            break
+                    if first_image:
+                        try:
+                            local_path = await first_image.convert_to_file_path()
+                            dim = await self._read_image_dimensions(local_path)
+                        except Exception as e:
+                            logger.warning(f"[agnes] 生图转换本地路径读取尺寸失败: {e}")
+                            comp_url = getattr(first_image, "url", "") or getattr(first_image, "file", "")
+                            dim = await self._read_image_dimensions(comp_url)
+                        
+                        if dim:
+                            w0, h0 = dim
+                            aspect = self._compute_aspect_ratio(w0, h0)
+                            if aspect:
+                                keep_aspect_ratio = aspect
+                                source = "命令行" if inline_keep else "插件配置（keep_original_size）"
+                                logger.info(f"[agnes] 生图保留比例已启用（{source}），原图 {w0}x{h0} → 比例 {aspect}（档位走配置）")
+                            else:
+                                yield event.plain_result("⚠️ 保留比例启用失败：无法解析参考图比例，将按 --ratio 生成。")
+                        else:
+                            # 尝试找出失败原因
+                            err_detail = "未知原因"
+                            try:
+                                from PIL import Image
+                                import urllib.request
+                                test_target = local_path if 'local_path' in locals() else (getattr(first_image, "url", "") or getattr(first_image, "file", ""))
+                                if test_target.startswith("file://"):
+                                    path_str = urllib.request.url2pathname(test_target[len("file://"):])
+                                    if os.name == 'nt' and path_str.startswith('/') and path_str[2] == ':':
+                                        path_str = path_str[1:]
+                                    p_obj = Path(path_str)
+                                    if not p_obj.exists():
+                                        err_detail = f"文件不存在: {path_str}"
+                                    else:
+                                        Image.open(p_obj)
+                                elif test_target.startswith(("http://", "https://")):
+                                    err_detail = f"网络链接无法在本地直接读取: {test_target}"
+                                else:
+                                    p_obj = Path(test_target)
+                                    if not p_obj.exists():
+                                        err_detail = f"本地文件不存在: {test_target}"
+                                    else:
+                                        Image.open(p_obj)
+                            except Exception as ex:
+                                err_detail = f"{type(ex).__name__}: {ex}"
+                            
+                            yield event.plain_result(
+                                f"⚠️ 保留比例启用失败：无法读取参考图尺寸。\n"
+                                f"🔍 输入参数: {test_target if 'test_target' in locals() else '无'}\n"
+                                f"❌ 错误详情: {err_detail}\n"
+                                f"将按 --ratio 生成。"
+                            )
             else:
                 yield event.plain_result("🎨 正在调用 Agnes 生成图像...")
 
@@ -1101,7 +1232,7 @@ class AgnesImagePlugin(Star):
                     prompt=clean_prompt,
                     reference_images=ref_images,
                     resolution=opts.get("res"),
-                    aspect_ratio=opts.get("ratio"),
+                    aspect_ratio=keep_aspect_ratio or opts.get("ratio"),
                     quality=opts.get("quality"),
                     model=opts.get("model"),
                 )
@@ -1148,7 +1279,7 @@ class AgnesImagePlugin(Star):
         保留参考图原比例：
           - 默认：读插件配置 keep_original_size（true/false）
           - 命令行临时覆盖：--keep-size / --keepsize / --same-size
-          - 启用时按第一张参考图的原宽高比生图，分辨率仍走 --res / default_resolution
+          - 启用时按第一张参考图的原比例生图，分辨率仍走 --res / default_resolution
         """
         raw = self._extract_prompt(event, prompt, ("改图",))
         opts = self._parse_options(raw)
@@ -1178,13 +1309,23 @@ class AgnesImagePlugin(Star):
             yield event.plain_result(err)
             return
 
-        # --keep-size：读取第一张参考图的宽高比，覆盖 ratio
+        # --keep-size：读取第一张参考图的比例，覆盖 ratio
         # 分辨率仍走 default_resolution（命令行 --res 或配置）
         keep_aspect_ratio: str | None = None
         if keep_size:
-            ref_paths = self._extract_reference_image_paths(event)
-            if ref_paths:
-                dim = await self._read_image_dimensions(ref_paths[0])
+            first_image = None
+            for comp in self._get_all_message_components(event):
+                if isinstance(comp, AstrImage):
+                    first_image = comp
+                    break
+            if first_image:
+                try:
+                    local_path = await first_image.convert_to_file_path()
+                    dim = await self._read_image_dimensions(local_path)
+                except Exception as e:
+                    logger.warning(f"[agnes] 改图转换本地路径读取尺寸失败: {e}")
+                    comp_url = getattr(first_image, "url", "") or getattr(first_image, "file", "")
+                    dim = await self._read_image_dimensions(comp_url)
                 if dim:
                     w0, h0 = dim
                     aspect = self._compute_aspect_ratio(w0, h0)
@@ -1201,11 +1342,42 @@ class AgnesImagePlugin(Star):
                         )
                     else:
                         yield event.plain_result(
-                            "⚠️ 保留比例启用失败：无法解析参考图宽高比，将按 --ratio 生成"
+                            "⚠️ 保留比例启用失败：无法解析参考图比例，将按 --ratio 生成"
                         )
                 else:
+                    # 尝试找出失败原因
+                    err_detail = "未知原因"
+                    try:
+                        # 重新运行一次捕获异常
+                        from PIL import Image
+                        import urllib.request
+                        # 这里的 local_path 是上面 try 块里的，如果没定义就用 first_image 的属性
+                        test_target = local_path if 'local_path' in locals() else (getattr(first_image, "url", "") or getattr(first_image, "file", ""))
+                        if test_target.startswith("file://"):
+                            path_str = urllib.request.url2pathname(test_target[len("file://"):])
+                            if os.name == 'nt' and path_str.startswith('/') and path_str[2] == ':':
+                                path_str = path_str[1:]
+                            p_obj = Path(path_str)
+                            if not p_obj.exists():
+                                err_detail = f"文件不存在: {path_str}"
+                            else:
+                                Image.open(p_obj)
+                        elif test_target.startswith(("http://", "https://")):
+                            err_detail = f"网络链接无法在本地直接读取: {test_target}"
+                        else:
+                            p_obj = Path(test_target)
+                            if not p_obj.exists():
+                                err_detail = f"本地文件不存在: {test_target}"
+                            else:
+                                Image.open(p_obj)
+                    except Exception as ex:
+                        err_detail = f"{type(ex).__name__}: {ex}"
+                    
                     yield event.plain_result(
-                        "⚠️ 保留比例启用失败：无法读取参考图尺寸，将按 --ratio 生成"
+                        f"⚠️ 保留比例启用失败：无法读取参考图尺寸。\n"
+                        f"🔍 输入参数: {test_target if 'test_target' in locals() else '无'}\n"
+                        f"❌ 错误详情: {err_detail}\n"
+                        f"将按 --ratio 生成。"
                     )
             else:
                 yield event.plain_result(
@@ -1279,22 +1451,32 @@ class AgnesImagePlugin(Star):
         video_duration = self.config.get("video_default_duration", "5s")
         video_output_format = self.config.get("video_output_format", "url")
 
-        # 1. 提取并转换参考图
+        # 1. 先立刻发出调用提示（第一条）
+        yield event.plain_result("🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...")
+
+        # 2. 再提取并转换参考图
         try:
-            reference_images, convert_notices = await self._extract_video_reference_images(event)
+            reference_images, convert_notices, ref_status, ref_dims = await self._extract_video_reference_images(event)
         except Exception as e:
             logger.error(f"[agnes] 生视频提取参考图失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 生视频提取参考图失败: {e}")
+            await event.send(MessageEventResult().message(f"❌ 参考图转换失败：{e}"))
             return
-            
-        is_img2img = len(reference_images) > 0
 
-        # 2. 先提示调用与模式切换
+        is_img2img = len(reference_images) > 0
         if is_img2img:
-            yield event.plain_result("🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...")
-        else:
-            yield event.plain_result("🌸 正在调用Agnes生成视频...")
-        
+            second_msg = None
+            if ref_status == "astrbot":
+                second_msg = "🌸 已通过 AstrBot 文件服务成功生成参考图公网链接！\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration)
+            elif ref_status == "third_party":
+                second_msg = "🌸 已将本地参考图成功上传至第三方图床！\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration)
+            elif ref_status == "fallback_public":
+                second_msg = "🌸 已回退并将本地参考图成功上传至免费公网图床！\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration)
+            elif ref_status == "public":
+                second_msg = "🌸 已将本地参考图成功上传至免费公网图床！\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration)
+            else:
+                second_msg = f"⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待..."
+            await event.send(MessageEventResult().message(second_msg))
+
         # 内联选项校验与读取
         res = opts.get("res") or self.config.get("video_default_resolution", "720p")
         ratio = opts.get("ratio") or self.config.get("video_default_aspect_ratio", "16:9")
@@ -1303,31 +1485,43 @@ class AgnesImagePlugin(Star):
         if opts.get("keep_size") is True:
             keep_original_size = True
             
+        # 如果启用保留原比例，根据提取到的尺寸计算最接近的标准比例，覆盖 ratio 参数
         if is_img2img and keep_original_size:
-            res = "keep"
+            first_dim = None
+            if ref_dims:
+                for d in ref_dims:
+                    if d:
+                        first_dim = d
+                        break
+            if first_dim:
+                w0, h0 = first_dim
+                # 视频模型只支持 5 种标准宽高比，因此只在这 5 种候选里计算最接近的比例
+                aspect = self._compute_aspect_ratio(w0, h0, ["16:9", "9:16", "1:1", "4:3", "3:4"])
+                if aspect:
+                    ratio = aspect
+                    logger.info(f"[agnes] 视频保留比例已启用，原图 {w0}x{h0} -> 自动匹配比例: {aspect}（分辨率仍按设置）")
+                else:
+                    yield event.plain_result(f"⚠️ 视频保留比例失败：无法解析参考图比例 ({w0}x{h0})，将按默认/指令比例生成。")
+            else:
+                # 尝试获取失败的图片参数
+                raw_target = "未知"
+                if reference_images:
+                    raw_target = reference_images[0]
+                yield event.plain_result(
+                    f"⚠️ 视频保留比例失败：无法读取参考图尺寸。\n"
+                    f"🔍 输入参数: {raw_target}\n"
+                    f"将按默认/指令比例生成。"
+                )
         
-        if res not in ["480p", "720p", "1080p", "keep"]:
+        if res not in ["480p", "720p", "1080p"]:
             yield event.plain_result(f"❌ 不支持的分辨率档位: {res}。支持: 480p/720p/1080p")
             return
         if ratio not in ["16:9", "9:16", "1:1", "4:3", "3:4"]:
             yield event.plain_result(f"❌ 不支持的长宽比: {ratio}。支持: 16:9/9:16/1:1/4:3/3:4")
             return
         
-        # 提前读取原始图片尺寸（防止 agnes_api 内部重复下载消耗一次性 Token）
+        # 图生视频：不再读取原图像素尺寸，严格按插件分辨率档位与比例参数走
         img_w, img_h = None, None
-        if is_img2img and keep_original_size:
-            res = "keep"
-            original_paths = self._extract_reference_image_paths(event)
-            if original_paths:
-                dims = await self._read_image_dimensions(original_paths[0])
-                if dims:
-                    img_w, img_h = dims
-                    # 为了符合视频生成的常见要求，将宽高调整为16的倍数
-                    def adjust_to_16(val: int) -> int:
-                        return max(16, round(val / 16) * 16)
-                    img_w = adjust_to_16(img_w)
-                    img_h = adjust_to_16(img_h)
-                    logger.info(f"[agnes] 图生视频保留原尺寸，提前读取尺寸: {img_w}x{img_h}")
         
         config = AgnesVideoRequestConfig(
             api_base=self.config.get("api_base", "https://apihub.agnes-ai.com/v1"),
@@ -1345,10 +1539,6 @@ class AgnesImagePlugin(Star):
             height=img_h
         )
 
-        submit_lines: list[str] = []
-        submit_lines.extend(convert_notices)
-        submit_lines.append(f"⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待...")
-        await event.send(event.plain_result("\n".join(submit_lines)))
         
         # 启动后台任务
         asyncio.create_task(self._run_video_task(event, config))
@@ -1497,11 +1687,11 @@ class AgnesImagePlugin(Star):
             "• 比例16:9 / 比例1:1 等\n"
             "• 质量高/中/低/自动（仅生图）\n"
             "• 模型2.1 / 模型2.0（仅生图）\n"
-            "• 保留原尺寸（图生图/视频时保留参考图尺寸）\n\n"
+            "• 保留原比例（图生图/视频时保留参考图比例）\n\n"
             "✨ 示例\n"
             "• 生图 一只猫\n"
             "• 生图 赛博朋克城市夜景 尺寸4K 比例16:9 模型2.1\n"
-            "• 改图 把它变成水彩画 比例1:1 质量高 保留原尺寸\n"
+            "• 改图 把它变成水彩画 比例1:1 质量高 保留原比例\n"
             "• 生视频 樱花飘落 尺寸1080p 比例16:9\n\n"
             "💡 小贴士\n"
             "• 兼容原有的 --res、--ratio 等英文参数格式\n"
