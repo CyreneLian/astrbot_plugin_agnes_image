@@ -529,7 +529,7 @@ class AgnesVideoRequestConfig:
     model: str
     prompt: str
     reference_images: list[str] = field(default_factory=list)
-    duration: str = "5s"  # "3s", "5s", "10s"
+    duration: str = "5s"  # "3s", "5s", "10s", "15s"
     proxy: Optional[str] = None
     timeout: int = 300  # API 请求超时时间
     output_format: str = "url"  # "url" 或 "file"
@@ -544,6 +544,8 @@ def _resolve_video_params(duration: str) -> dict[str, int]:
         return {"num_frames": 81, "frame_rate": 24}
     elif duration == "10s":
         return {"num_frames": 241, "frame_rate": 24}
+    elif duration == "15s":
+        return {"num_frames": 361, "frame_rate": 24}
     else:  # 默认 5s
         return {"num_frames": 121, "frame_rate": 24}
 
@@ -572,52 +574,21 @@ VIDEO_SIZE_PRESETS = {
 }
 
 def _build_video_payload(config: AgnesVideoRequestConfig) -> dict[str, Any]:
+    # 统一按分辨率档位 + 宽高比选择标准尺寸；width/height 仅作为显式兜底。
+    res = config.resolution or "720p"
+    ratio = config.aspect_ratio or "16:9"
+    size_map = VIDEO_SIZE_PRESETS.get(res, VIDEO_SIZE_PRESETS["720p"])
+
     if config.width and config.height:
         w, h = config.width, config.height
     else:
-        res = config.resolution or "720p"
-        ratio = config.aspect_ratio or "16:9"
-        
-        # 映射尺寸，若匹配不到则回退到 1152x768
-        size_map = VIDEO_SIZE_PRESETS.get(res, VIDEO_SIZE_PRESETS["720p"])
-        w, h = size_map.get(ratio, (1152, 768))
-        
-        # 图生视频保留原尺寸逻辑
-        ref_images = config.reference_images or []
-        if ref_images and config.resolution == "keep":
-            try:
-                # 尝试从第一张参考图读取真实尺寸
-                data_uri = _to_data_uri(ref_images[0])
-                if data_uri:
-                    import base64
-                    import io
-                    from PIL import Image
-                    
-                    if data_uri.startswith("data:"):
-                        b64_data = data_uri.split(",", 1)[1]
-                        raw_bytes = base64.b64decode(b64_data)
-                        img = Image.open(io.BytesIO(raw_bytes))
-                        w, h = img.size
-                    elif data_uri.startswith("http://") or data_uri.startswith("https://"):
-                        # 如果是 URL，同步下载图片读取尺寸
-                        import urllib.request
-                        # 使用超时限制防止同步请求卡死
-                        with urllib.request.urlopen(data_uri, timeout=5) as response:
-                            raw_bytes = response.read()
-                        img = Image.open(io.BytesIO(raw_bytes))
-                        w, h = img.size
-                    
-                    # 为了符合视频生成的常见要求，将宽高调整为16的倍数
-                    def adjust_to_16(val: int) -> int:
-                        return max(16, round(val / 16) * 16)
-                    
-                    w = adjust_to_16(w)
-                    h = adjust_to_16(h)
-                    logger.info(f"[agnes] 图生视频保留原尺寸已启用，参考图尺寸: {img.size} -> 调整为: {w}x{h}")
-            except Exception as e:
-                logger.warning(f"[agnes] 图生视频读取参考图尺寸失败: {e}，回退到默认尺寸")
+        w, h = size_map.get(ratio, size_map.get("16:9", (1152, 768)))
 
-            
+    # 如果传入的尺寸与目标比例不一致，优先落回标准表中的尺寸
+    std = size_map.get(ratio)
+    if std:
+        w, h = std
+
     payload: dict[str, Any] = {
         "model": config.model,
         "prompt": config.prompt,
