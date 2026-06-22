@@ -136,9 +136,10 @@
     "options": [
       "3s",
       "5s",
-      "10s"
+      "10s",
+      "15s"
     ],
-    "default": "5s"
+    "default": "15s"
   },
   "video_output_format": {
     "type": "string",
@@ -152,8 +153,8 @@
   },
   "video_keep_original_size": {
     "type": "bool",
-    "description": "图生视频时按参考图原尺寸生成",
-    "hint": "开启后，图生视频指令自动读取第一张参考图的真实尺寸，并按 16 字节对齐后生成视频（覆盖默认视频分辨率和宽高比）。",
+    "description": "图生视频时保留参考图比例生成",
+    "hint": "开启后，图生视频指令保留参考图比例，不覆盖默认视频分辨率。",
     "default": true
   },
   "video_request_timeout": {
