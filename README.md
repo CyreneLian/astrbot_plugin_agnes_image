@@ -235,7 +235,7 @@ astrbot_plugin_agnes_image/
 
 - **官方主页**：[agnes-ai.com](https://agnes-ai.com/)
 - **API 控制台**：[apihub.agnes-ai.com](https://apihub.agnes-ai.com/)
-- **计费**：目前提供免费额度（官方 AI 平台，注册后可获取免费 Key 使用）
+- **计费**：目前模型调用全部免费
 
 ## 系统要求
 
