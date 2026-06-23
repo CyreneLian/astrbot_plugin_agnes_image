@@ -1451,10 +1451,7 @@ class AgnesImagePlugin(Star):
         video_duration = self.config.get("video_default_duration", "5s")
         video_output_format = self.config.get("video_output_format", "url")
 
-        # 1. 先立刻发出调用提示（第一条）
-        yield event.plain_result("🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...")
-
-        # 2. 再提取并转换参考图
+        # 1. 提取参考图以判断是文生视频还是图生视频
         try:
             reference_images, convert_notices, ref_status, ref_dims = await self._extract_video_reference_images(event)
         except Exception as e:
@@ -1464,6 +1461,8 @@ class AgnesImagePlugin(Star):
 
         is_img2img = len(reference_images) > 0
         if is_img2img:
+            # 图生视频：先发第一条，再发第二条
+            yield event.plain_result("🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...")
             second_msg = None
             if ref_status == "astrbot":
                 second_msg = "🌸 已通过 AstrBot 文件服务成功生成参考图公网链接！\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration)
@@ -1476,6 +1475,9 @@ class AgnesImagePlugin(Star):
             else:
                 second_msg = f"⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待..."
             await event.send(MessageEventResult().message(second_msg))
+        else:
+            # 文生视频：合并为单条消息发送，包含换行
+            yield event.plain_result("🌸 正在调用Agnes生成视频...\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration))
 
         # 内联选项校验与读取
         res = opts.get("res") or self.config.get("video_default_resolution", "720p")
