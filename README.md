@@ -192,10 +192,20 @@ pip install -r requirements.txt
 
 ```text
 astrbot_plugin_agnes_image/
-├── main.py              # 插件主逻辑：指令注册、图像/视频生成流程、发送策略与 AstrBot 文件服务补丁
+├── main.py              # 插件主入口：指令注册、生图/生视频调度与状态响应
 ├── agnes_api.py         # Agnes API 封装：生图、图生图、生视频任务提交与结果解析
-├── napcat_stream.py     # NapCat Stream API 分块上传兜底发送逻辑
-├── _conf_schema.json    # AstrBot 插件配置项定义
+├── napcat_stream.py     # NapCat Stream API 分块流式上传兜底发送逻辑
+├── core/
+│   ├── __init__.py
+│   ├── image_service.py # 图像服务：参数解析、尺寸匹配与参考图提取
+│   ├── video_service.py # 视频服务：后台任务异步轮询与结果分流发送
+│   └── uploader.py      # 上传器：本地临时图片复制、图床及文件服务转换
+├── models/
+│   ├── __init__.py
+│   └── config.py        # 配置模型：定义并校验插件所需的各项配置项
+├── utils/
+│   └── __init__.py
+├── _conf_schema.json    # AstrBot 插件配置项 schema 定义
 ├── metadata.yaml        # 插件元数据：名称、版本、作者、描述等
 ├── requirements.txt     # Python 依赖声明
 ├── README.md            # 插件说明文档
