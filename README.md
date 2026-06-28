@@ -221,21 +221,21 @@ astrbot_plugin_agnes_image/
 | `api_key` | API 密钥（前往 agnes-ai.com 注册获取免费 Key） | （必填） |
 | `model` | 生图模型 | `agnes-image-2.1-flash` |
 | `proxy` | 代理地址（留空不使用，支持 http/https/socks5） | （空） |
-| `default_resolution` | 默认分辨率档位（`1K`/`2K`/`4K`） | `2K` |
-| `default_aspect_ratio` | 默认长宽比（10 种预设） | `1:1` |
-| `default_quality` | 默认质量档（`auto`/`low`/`medium`/`high`） | `auto` |
+| `default_resolution` | 默认分辨率档位（`1K`/`2K`/`4K`） | `1K` |
+| `default_aspect_ratio` | 默认长宽比（10 种预设） | `3:2` |
+| `default_quality` | 默认质量档（`auto`/`low`/`medium`/`high`） | `high` |
 | `output_format` | 图片发送方式（`url` 直发 / `auto` 智能切换） | `url` |
 | `auto_threshold` | 智能切换文件大小阈值 (MB) | `2` |
-| `keep_original_size` | 改图时按参考图原比例生图（自动匹配最接近的预设比例） | `false` |
+| `keep_original_size` | 改图时按参考图原比例生图（自动匹配最接近的预设比例） | `true` |
 | `request_timeout` | API 请求超时时间（秒） | `300` |
 | `video_model` | 生视频模型 | `agnes-video-v2.0` |
 | `video_default_resolution` | 默认视频分辨率（`480p`/`720p`/`1080p`） | `480p` |
 | `video_default_aspect_ratio` | 默认视频长宽比 | `16:9` |
-| `video_default_duration` | 默认视频时长（`3s`/`5s`/`10s`） | `5s` |
+| `video_default_duration` | 默认视频时长（`3s`/`5s`/`10s`/`15s`） | `15s` |
 | `video_output_format` | 视频发送方式（`url` 直发 / `auto` 智能切换） | `url` |
 | `video_keep_original_size` | 图生视频时是否保留参考图比例 | `true` |
 | `video_request_timeout` | 视频生成及状态轮询的最大超时时间（秒） | `1000` |
-| `video_img_handling_method` | 图生视频本地参考图传输方式（`astrbot`/`third_party`/`free_public`） | `free_public` |
+| `video_img_handling_method` | 图生视频本地参考图传输方式（`astrbot`/`third_party`/`free_public`） | `astrbot` |
 | `video_enable_astrbot_file_magic` | 是否开启 AstrBot 文件服务永久链接补丁 | `true` |
 | `video_file_service_base_url` | AstrBot 本地文件服务公网访问地址（面板外网地址，如 `http://IP:6185`） | （空） |
 | `third_party_upload_url` | 第三方图床上传 API 地址 | （空） |
