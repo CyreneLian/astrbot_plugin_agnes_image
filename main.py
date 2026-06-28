@@ -916,16 +916,21 @@ class AgnesImagePlugin(Star):
         video_duration = self.plugin_config.video_default_duration
         video_output_format = self.plugin_config.video_output_format
 
-        try:
-            reference_images, convert_notices, ref_status, ref_dims = await self._extract_video_reference_images(event)
-        except Exception as e:
-            logger.error(f"[agnes] 生视频提取参考图失败: {e}", exc_info=True)
-            await event.send(MessageEventResult().message(f"❌ 参考图转换失败：{e}"))
-            return
+        is_img2img = False
+        for comp in self.image_service._get_all_message_components(event):
+            if isinstance(comp, AstrImage):
+                is_img2img = True
+                break
 
-        is_img2img = len(reference_images) > 0
         if is_img2img:
             yield event.plain_result("🌸 正在调用Agnes生成视频...\n🎬 检测到参考图，自动切换为图生视频模式...")
+            try:
+                reference_images, convert_notices, ref_status, ref_dims = await self._extract_video_reference_images(event)
+            except Exception as e:
+                logger.error(f"[agnes] 生视频提取参考图失败: {e}", exc_info=True)
+                await event.send(MessageEventResult().message(f"❌ 参考图转换失败：{e}"))
+                return
+
             second_msg = None
             if ref_status == "astrbot":
                 second_msg = "🌸 已通过 AstrBot 文件服务成功生成参考图公网链接！\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration)
@@ -939,6 +944,7 @@ class AgnesImagePlugin(Star):
                 second_msg = f"⏳ 视频生成任务已提交，预计需要几分钟（时长: {video_duration}），请耐心等待..."
             await event.send(MessageEventResult().message(second_msg))
         else:
+            reference_images, convert_notices, ref_status, ref_dims = [], [], None, []
             yield event.plain_result("🌸 正在调用Agnes生成视频...\n⏳ 视频生成任务已提交，预计需要几分钟（时长: {0}），请耐心等待...".format(video_duration))
 
         res = opts.get("res") or self.plugin_config.video_default_resolution
