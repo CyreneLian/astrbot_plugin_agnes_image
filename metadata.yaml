@@ -4,4 +4,4 @@ display_name: Agnes 图像与视频生成
 version: v2.0.1
 author: 往昔的涟漪
 repo: https://github.com/CyreneLian/astrbot_plugin_agnes_image
-astrbot_version: ">=4.16"
+astrbot_version: ">=4.26"

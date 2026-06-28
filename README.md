@@ -249,7 +249,7 @@ astrbot_plugin_agnes_image/
 
 ## 系统要求
 
-- AstrBot `>=4.16`
+- AstrBot `>=4.26`
 - Python 3.12+
 
 ## 联系方式
