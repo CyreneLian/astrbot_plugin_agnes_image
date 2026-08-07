@@ -1,0 +1,201 @@
+{
+  "api_key": {
+    "description": "API Key",
+    "type": "string",
+    "hint": "前往官方主页 agnes-ai.com 注册后获取免费 Key 使用",
+    "default": ""
+  },
+  "api_base": {
+    "description": "Agnes AI API 端点地址",
+    "type": "string",
+    "hint": "Agnes AI 网关地址。默认 国内节点https://apihub.agnes-ai.cn/v1",
+    "default": "https://apihub.agnes-ai.cn/v1"
+  },
+  "proxy": {
+    "description": "代理地址",
+    "type": "string",
+    "hint": "留空不使用，支持 http/https/socks5 格式",
+    "default": ""
+  },
+  "model": {
+    "description": "生图模型",
+    "type": "string",
+    "hint": "选择要使用的 Agnes 图像生成模型",
+    "options": [
+      "agnes-image-2.1-flash",
+      "agnes-image-2.0-flash"
+    ],
+    "default": "agnes-image-2.1-flash"
+  },
+  "default_resolution": {
+    "description": "默认分辨率档位",
+    "type": "string",
+    "hint": "分辨率档位（固定尺寸池：1K / 2K / 4K）。4K 仅 agnes-image-2.1-flash 支持，agnes-image-2.0-flash 不支持。由于 4K 尺寸较大，不推荐使用。",
+    "options": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "default": "1K"
+  },
+  "default_aspect_ratio": {
+    "description": "默认长宽比",
+    "type": "string",
+    "hint": "图像长宽比（10 种预设可选，宽高均为 16 的倍数，长短边比 ≤ 3:1）",
+    "options": [
+      "1:1",
+      "16:9",
+      "4:3",
+      "3:2",
+      "9:16",
+      "4:5",
+      "5:4",
+      "21:9",
+      "3:4",
+      "2:3"
+    ],
+    "default": "3:2"
+  },
+  "default_quality": {
+    "description": "图像质量档",
+    "type": "string",
+    "hint": "为当前模型附加的质量参数（追加到 prompt 后），auto=不附加",
+    "options": [
+      "auto",
+      "low",
+      "medium",
+      "high"
+    ],
+    "default": "high"
+  },
+  "output_format": {
+    "type": "string",
+    "description": "图片发送方式",
+    "hint": "url：直接发送图片链接让聊天平台自己去下载，不占用服务器带宽（推荐,但只完整适配过qq和网页端详见插件文档）。auto：智能切换（文件大小小于阈值走 base64，大于等于走 file）。",
+    "options": [
+      "url",
+      "auto"
+    ],
+    "default": "url"
+  },
+  "auto_threshold": {
+    "type": "int",
+    "description": "智能切换文件大小阈值 (MB)",
+    "hint": "当发送方式选择“智能切换”时，文件大小（图片或视频）小于该值时使用 base64 发送，大于等于该值时使用 file 发送。",
+    "default": 2
+  },
+  "keep_original_size": {
+    "description": "改图时按参考图原比例生图",
+    "type": "bool",
+    "hint": "开启后，改图指令自动按第一张参考图的原宽高比生图（自动匹配最接近的预设比例）。",
+    "default": true
+  },
+  "request_timeout": {
+    "type": "int",
+    "description": "图片 API 请求超时时间",
+    "hint": "生图请求的最大超时时间（单位：秒）。",
+    "default": 300
+  },
+  "video_model": {
+    "type": "string",
+    "description": "生视频模型",
+    "hint": "选择要使用的 Agnes 视频生成模型",
+    "options": [
+      "agnes-video-v2.0"
+    ],
+    "default": "agnes-video-v2.0"
+  },
+  "video_default_resolution": {
+    "type": "string",
+    "description": "默认视频分辨率",
+    "hint": "选择默认生成的视频分辨率档位",
+    "options": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "default": "480p"
+  },
+  "video_default_aspect_ratio": {
+    "type": "string",
+    "description": "默认视频宽高比",
+    "hint": "选择默认生成的视频长宽比例",
+    "options": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4"
+    ],
+    "default": "16:9"
+  },
+  "video_default_duration": {
+    "type": "string",
+    "description": "默认视频时长",
+    "hint": "生成的视频大约时长。时长越长，等待时间越久。",
+    "options": [
+      "3s",
+      "5s",
+      "10s",
+      "15s"
+    ],
+    "default": "15s"
+  },
+  "video_output_format": {
+    "type": "string",
+    "description": "视频发送方式",
+    "hint": "url：直接发送视频链接让聊天平台自己去下载，不占用服务器带宽（推荐,但只完整适配过qq和网页端详见插件文档）。auto：智能切换（文件大小小于阈值走 base64，大于等于走 file）。",
+    "options": [
+      "url",
+      "auto"
+    ],
+    "default": "url"
+  },
+  "video_keep_original_size": {
+    "type": "bool",
+    "description": "图生视频时保留参考图比例生成",
+    "hint": "开启后，图生视频指令保留参考图比例，不覆盖默认视频分辨率。",
+    "default": true
+  },
+  "video_request_timeout": {
+    "type": "int",
+    "description": "视频生成超时时间",
+    "hint": "视频生成及轮询的最大超时时间（单位：秒）。因为视频生成较慢，推荐设置 300 秒以上。",
+    "default": 1000
+  },
+  "video_img_handling_method": {
+    "type": "string",
+    "description": "本地图片传输方式",
+    "hint": "图生视频时，对本地图片的处理方式。astrbot: 使用 AstrBot 自带文件服务（推荐，需配置下方公网地址）；third_party: 自定义第三方图床（需填写下方 API 地址与 Token）；free_public: 免费公网图床（Telegraph/Catbox，无需配置）。",
+    "options": [
+      "astrbot",
+      "third_party",
+      "free_public"
+    ],
+    "default": "astrbot"
+  },
+  "video_enable_astrbot_file_magic": {
+    "type": "bool",
+    "description": "是否开启 AstrBot 文件服务永久链接补丁",
+    "default": true,
+    "hint": "选择 AstrBot 自带文件服务需开启此选项并且重启 astrbot，详见插件文档"
+  },
+  "video_file_service_base_url": {
+    "type": "string",
+    "description": "AstrBot文件服务公网地址",
+    "hint": "选择 astrbot 方式时，在此填写你面板的外网访问地址（如 http://你的IP:6185 或域名）。留空则自动读取 AstrBot 全局 callback_api_base 配置。",
+    "default": ""
+  },
+  "third_party_upload_url": {
+    "type": "string",
+    "description": "第三方图床上传 API 地址",
+    "hint": "选择 third_party 方式时填写。例如 SM.MS/S.EE: https://s.ee/api/v1/file/upload ；ImgBB: https://api.imgbb.com/1/upload",
+    "default": ""
+  },
+  "third_party_token": {
+    "type": "string",
+    "description": "第三方图床 Token",
+    "hint": "选择 third_party 方式时填写的 API Token / Key。",
+    "default": ""
+  }
+}
