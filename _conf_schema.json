@@ -235,6 +235,12 @@
         "description": "第三方图床 Key",
         "hint": "选择 third_party 方式时填写的第三方图床 API Key",
         "default": ""
+      },
+      "third_party_file_field": {
+        "type": "string",
+        "description": "第三方图床文件字段",
+        "hint": "上传表单中的文件字段名。根据第三方图云要求的字段修改。留空时使用默认值 image。",
+        "default": "image"
       }
     }
   }

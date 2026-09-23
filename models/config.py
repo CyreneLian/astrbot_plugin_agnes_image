@@ -34,6 +34,7 @@ class AgnesPluginConfig:
     video_file_service_base_url: str = ""
     third_party_upload_url: str = ""
     third_party_token: str = ""
+    third_party_file_field: str = "image"
 
     @staticmethod
     def _safe_int(value: Any, default: int) -> int:
@@ -74,6 +75,7 @@ class AgnesPluginConfig:
             video_file_service_base_url=str(config.get("video_file_service_base_url", "")).strip(),
             third_party_upload_url=str(config.get("third_party_upload_url", "")).strip(),
             third_party_token=str(config.get("third_party_token", "")).strip(),
+            third_party_file_field=str(config.get("third_party_file_field", "image")).strip() or "image",
         )
 
     def validate(self) -> bool:
