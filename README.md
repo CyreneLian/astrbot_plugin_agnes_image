@@ -261,6 +261,7 @@ astrbot_plugin_agnes_image/
 | `video_file_service_base_url` | AstrBot 本地文件服务公网访问地址（面板外网地址，如 `http://IP:6185`） | （空） |
 | `third_party_upload_url` | 第三方图床 API 地址 | （空） |
 | `third_party_token` | 第三方图床 Key | （空） |
+| `third_party_file_field` | 第三方图床上传表单的文件字段名（如 ImgBB 填 `image`、CloudFlare-ImgBed 填 `file`、Chevereto/Lsky 填 `source`） | `image` |
 
 ## ❓ 常见问题 (FAQ)
 
@@ -282,7 +283,7 @@ astrbot_plugin_agnes_image/
 - **解决办法（任选其一）**：
   1. **nginx 反向代理（推荐）**：在宿主机 nginx 的 80 端口 server 块中添加 `location /api/file/` 与 `location /api/v1/files/` 反代到本机 `http://127.0.0.1:6185`，再把插件配置 `video_file_service_base_url` 改为 `http://<服务器公网IP>:80`，重载插件即可。
   2. **内网穿透**：用 frp / cloudflared 等把文件服务映射到公网域名（80/443 端口），并更新 `video_file_service_base_url`。
-  3. **第三方图床**：将 `video_img_handling_method` 改为 `third_party`，配置公网可访问的图床（如 sm.ms / ImgURL / 聚合图床等）的 `third_party_upload_url` 与 `third_party_token`。
+  3. **第三方图床**：将 `video_img_handling_method` 改为 `third_party`，配置公网可访问的图床的 `third_party_upload_url` 与 `third_party_token`；并按图床要求填写 `third_party_file_field`（表单的文件字段名，如 ImgBB 用 `image`、CloudFlare-ImgBed 用 `file`、Chevereto/Lsky 用 `source`），字段名不符会返回 HTTP 405。
 
 
 ### 为什么在 Agnes 官方控制台创建的 API Key 使用时提示无效？

@@ -1,5 +1,10 @@
 # 📊 astrbot_plugin_agnes_image CHANGELOG
 
+## 🌸 v2.3.4 (2026-09-24)
+
+- 新增「第三方图床文件字段」配置项，修复上传字段固定为 image 导致 CloudFlare-ImgBed 等图床返回 HTTP 405 的问题。
+- 解析图床响应时新增 src 字段识别，相对路径自动用图床域名补全为完整 URL。
+
 ## 🌸 v2.3.3 (2026-09-23)
 
 - 修复生图与生视频工具的 Tool Schema 参数为空问题，v2.2.0 起 Args 段内的说明行导致 docstring 解析失败，大模型无法传参调用，现已修复。

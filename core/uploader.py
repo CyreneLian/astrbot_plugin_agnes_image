@@ -2,6 +2,7 @@
 Agnes AI 图像与视频上传、图床及文件服务魔改模块
 """
 import os
+import re
 from typing import Any, Dict, List, Optional
 import aiohttp
 
@@ -34,9 +35,17 @@ class Uploader:
                 return True
         return False
 
-    def _find_url_in_json(self, data: Any) -> Optional[str]:
-        """递归查找 JSON 响应中的 URL，优先返回图片直链（带图片后缀或图床 CDN 域名）"""
+    def _find_url_in_json(self, data: Any, base_url: str = "") -> Optional[str]:
+        """递归查找 JSON 响应中的 URL，优先返回图片直链（带图片后缀或图床 CDN 域名）
+
+        base_url 非空时，相对路径（如 /file/xxx.png）会用其域名补全为绝对地址。
+        """
         fallback: Optional[str] = None
+        origin = ""
+        if base_url:
+            m = re.match(r"^(https?://[^/]+)", base_url.strip())
+            if m:
+                origin = m.group(1)
 
         def walk(node: Any) -> Optional[str]:
             nonlocal fallback
@@ -49,11 +58,18 @@ class Uploader:
                 return None
             if isinstance(node, dict):
                 for k, v in node.items():
-                    if k.lower() in ("url", "link", "href", "shorturl") and isinstance(v, str) and v.startswith(("http://", "https://")):
-                        if self._looks_like_image_url(v):
-                            return v
-                        if fallback is None:
-                            fallback = v
+                    if k.lower() in ("url", "link", "href", "shorturl", "src") and isinstance(v, str) and v:
+                        # 相对路径（/file/xxx.png）用图床域名补全为绝对地址
+                        if not v.startswith(("http://", "https://")):
+                            if origin and v.startswith("/"):
+                                v = origin + v
+                            else:
+                                v = None
+                        if v:
+                            if self._looks_like_image_url(v):
+                                return v
+                            if fallback is None:
+                                fallback = v
                     res = walk(v)
                     if res:
                         return res
@@ -105,8 +121,11 @@ class Uploader:
             async with aiohttp.ClientSession() as session:
                 data = aiohttp.FormData()
                 filename = os.path.basename(file_path)
+                field_name = getattr(
+                    self.plugin.plugin_config, "third_party_file_field", "image"
+                ) or "image"
                 with open(file_path, 'rb') as f:
-                    data.add_field('image', f, filename=filename)
+                    data.add_field(field_name, f, filename=filename)
                     headers = {}
                     if token:
                         headers['Authorization'] = f"Bearer {token}"
@@ -117,7 +136,7 @@ class Uploader:
                     async with session.post(upload_url, data=data, headers=headers, params=params) as resp:
                         if resp.status == 200:
                             res_json = await resp.json()
-                            found_url = self._find_url_in_json(res_json)
+                            found_url = self._find_url_in_json(res_json, upload_url)
                             if found_url:
                                 return found_url
                             raise Exception(f"未在响应中找到图片 URL: {res_json}")
