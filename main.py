@@ -57,6 +57,12 @@ AGNES_VIDEO_MODELS = [
     "agnes-video-2.5",
 ]
 
+# 官方已下线的视频模型 → 保留兼容但拦截调用，提示改用 2.5 系列
+# 来源：https://wiki.agnes-ai.com/zh-Hans/docs/agnes-video-v20（标题即「已下线」）
+AGNES_VIDEO_MODELS_OFFLINE = {
+    "agnes-video-v2.0": "已于 2026-09-25 23:59:59 (UTC+8) 正式下线",
+}
+
 # 插件名
 _PLUGIN_NAME = "astrbot_plugin_agnes_image"
 # 临时图片缓存目录名
@@ -71,7 +77,7 @@ _AGNES_FILE_SERVICE_MAGIC_PATCHED = False
     "astrbot_plugin_agnes_image",
     "往昔的涟漪",
     "Agnes AI 图像与视频生成插件，依据 Agnes 官方文档进行了原生适配以实现完全免费、较高质量的定制化生成体验，支持文生图、图生图以及视频生成。",
-    "2.3.4",
+    "2.3.5",
     "https://github.com/CyreneLian/astrbot_plugin_agnes_image",
 )
 class AgnesImagePlugin(Star):
@@ -946,15 +952,14 @@ class AgnesImagePlugin(Star):
         大模型在成功获得 task_id 后，必须立即向用户回复一条自然语言消息（告知任务已成功提交，并提醒用户过几分钟后再让大模型进行进度查询）。
 
         支持的视频模型及其参数：
-        - agnes-video-v2.0：分辨率 480p/720p/1080p；比例 16:9/9:16/1:1/4:3/3:4；时长 5s/10s/12s/15s/18s。
         - agnes-video-2.5-flash：分辨率 720P；比例 16:9/9:16/1:1/4:3/3:4/21:9；时长 5s/10s/12s。
-        - agnes-video-2.5：分辨率 720P/960P/2K；比例 16:9/9:16/1:1/4:3/3:4/21:9；时长 5s/10s/12s。
+        - agnes-video-2.5：分辨率 720P/1080P/2K；比例 16:9/9:16/1:1/4:3/3:4/21:9；时长 5s/10s/12s。
 
         注意：所有参数需与所选模型匹配（具体支持范围见上方模型说明）；如果用户没有明确要求某个参数，请留空该参数，使用插件默认值。
 
         Args:
             prompt (str): 视频生成的详细描述（建议使用较详细英文描述或中文描述）。
-            model (str, optional): 视频模型，可选 agnes-video-v2.0 / agnes-video-2.5-flash / agnes-video-2.5（注意：agnes-video-2.5 为付费模型，如无用户明确要求请勿主动使用）。
+            model (str, optional): 视频模型，可选 agnes-video-2.5-flash / agnes-video-2.5（注意：agnes-video-2.5 为付费模型，如无用户明确要求请勿主动使用）。
             resolution (str, optional): 视频分辨率档位。
             aspect_ratio (str, optional): 视频长宽比。
             duration (str, optional): 视频时长。
@@ -988,7 +993,11 @@ class AgnesImagePlugin(Star):
         # 支持大模型选择模型（白名单校验），为空时使用插件配置的默认模型
         video_model = (model.strip() or opts.get("model") or self.plugin_config.video_model).strip()
         if video_model not in AGNES_VIDEO_MODELS:
-            return f"error:模型不受支持: {video_model}。支持的模型: {' / '.join(AGNES_VIDEO_MODELS)}"
+            _alive_models = [m for m in AGNES_VIDEO_MODELS if m not in AGNES_VIDEO_MODELS_OFFLINE]
+            return f"error:模型不受支持: {video_model}。支持的模型: {' / '.join(_alive_models)}"
+        _offline = AGNES_VIDEO_MODELS_OFFLINE.get(video_model)
+        if _offline:
+            return f"error:模型 {video_model} 已下线（{_offline}），请改用 {' / '.join(m for m in AGNES_VIDEO_MODELS if m not in AGNES_VIDEO_MODELS_OFFLINE)}"
 
         res = resolution.strip() or self.plugin_config.video_default_resolution
         ratio = aspect_ratio.strip() or self.plugin_config.video_default_aspect_ratio
@@ -1012,7 +1021,7 @@ class AgnesImagePlugin(Star):
                 f"◆ 长宽比不受 {video_model} 支持: {ratio}。"
                 f"支持: {self._fmt_ratio_list(_caps['ratio'])}"
             )
-        # 时长校验：按模型能力表（2.5 系列支持 12s，v2.0 不支持）
+        # 时长校验：按模型能力表（2.5 系列支持 12s，旧版模型支持更长档位）
         if dur_norm not in allowed_durs:
             _errors.append(
                 f"◆ 视频时长不受 {video_model} 支持: {duration_val}。"
@@ -1083,19 +1092,33 @@ class AgnesImagePlugin(Star):
             return "error:缺少 task_id"
 
         try:
-            from .agnes_api import _get_agnes_session, _parse_error_body
+            from .agnes_api import _get_agnes_session, _parse_error_body, _pick_video_url
             import asyncio, time, json
             
             headers = {"Authorization": f"Bearer {self.plugin_config.api_key}"}
             session = await _get_agnes_session(self.plugin_config.proxy)
             
-            # 使用官方推荐的轮询接口
-            # 注意：agnes_api.py 中的轮询逻辑比较复杂，我们这里重新实现一个简化版的轮询
-            poll_url = f"{self.plugin_config.api_base.rstrip('/')}/videos/{task_id}"
+            # 轮询：官方推荐 GET /agnesapi?video_id=<VIDEO_ID>&model_name=<MODEL>
+            # 适用于 text / keyframe / reference 全部模式；旧端点 /videos/{task_id} 作为兜底
+            from urllib.parse import quote
+            _api_root = self.plugin_config.api_base.rstrip("/")
+            if _api_root.endswith("/v1"):
+                _api_root = _api_root[:-3]
+            _model_name = getattr(self.plugin_config, "video_model", "") or "agnes-video-2.5-flash"
+            poll_urls = [
+                f"{_api_root}/agnesapi?video_id={quote(task_id, safe='')}&model_name={quote(_model_name, safe='')}",
+                f"{self.plugin_config.api_base.rstrip('/')}/videos/{task_id}",
+            ]
             
             t0 = time.monotonic()
+            poll_idx = 0
             while time.monotonic() - t0 < int(self.plugin_config.video_request_timeout):
+                poll_url = poll_urls[min(poll_idx, len(poll_urls) - 1)]
                 async with session.get(poll_url, headers=headers) as resp:
+                    if resp.status == 404 and poll_idx < len(poll_urls) - 1:
+                        # 官方端点查不到，切换到兜底端点重试
+                        poll_idx += 1
+                        continue
                     if resp.status != 200:
                         body = await resp.text()
                         err_code, err_msg = _parse_error_body(body)
@@ -1104,21 +1127,25 @@ class AgnesImagePlugin(Star):
                     
                     data = await resp.json()
                     status = data.get("status")
-                    if status in ["completed", "succeeded"]:
-                        meta = data.get("metadata", {})
-                        video_url = meta.get("url") or data.get("video_url") or data.get("file_url")
-                        if not video_url:
-                            return "error:视频已完成但未找到 URL"
-                        
-                        # 手动发送视频给用户
+                    # 容错：只要能解析出合法视频地址就视为成功（与指令路径一致）。
+                    # 官方端点返回顶层 url，/videos 端点返回 metadata.url，两条都覆盖；
+                    # 部分平台生成完毕后可能因回调/转码报错把状态写成 failed，但视频已生成。
+                    video_url = _pick_video_url(data)
+                    if video_url:
                         mer = MessageEventResult()
                         mer.chain.append(Video.fromURL(video_url))
                         await event.send(mer)
                         return f"success:视频生成成功！视频链接：{video_url}"
-                    elif status in ["failed", "error"]:
-                        err_msg = data.get("error", {}).get("message", "未知错误")
+                    if status in ["completed", "succeeded"]:
+                        return "error:视频已完成但未找到 URL"
+                    elif status in ["failed", "error", "cancelled", "canceled"]:
+                        err_msg = (
+                            data.get("error", {}).get("message")
+                            if isinstance(data.get("error"), dict)
+                            else data.get("error")
+                        ) or data.get("message") or data.get("detail") or "未知错误"
                         return f"error:视频生成失败：{err_msg}"
-                    elif status in ["queued", "processing", "starting", "running"]:
+                    elif status in ["queued", "pending", "processing", "starting", "running", "in_progress"]:
                         await asyncio.sleep(5)
                     else:
                         return f"error:未知状态：{status}"
@@ -1257,23 +1284,23 @@ class AgnesImagePlugin(Star):
                 "ratio": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
                 "res_label": "720P",
                 "durations": ["5s", "10s", "12s"],
-                "durations_label": "5s / 10s / 12s（2.5 系列最长 12 秒）",
+                "durations_label": "5s / 10s / 12s",
             }
         if m == "agnes-video-2.5":
             return {
-                "res": ["720P", "960P", "2K"],
+                "res": ["720P", "1080P", "2K"],
                 "ratio": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
-                "res_label": "720P / 960P / 2K",
+                "res_label": "720P / 1080P / 2K",
                 "durations": ["5s", "10s", "12s"],
-                "durations_label": "5s / 10s / 12s（2.5 系列最长 12 秒）",
+                "durations_label": "5s / 10s / 12s",
             }
-        # 默认：v2.0 及未识别模型
+        # 默认：兼容档（面板已不再暴露旧版模型，此档仅作兜底）
         return {
             "res": ["480p", "720p", "1080p"],
             "ratio": ["16:9", "9:16", "1:1", "4:3", "3:4"],
             "res_label": "480p / 720p / 1080p",
             "durations": ["5s", "10s", "12s", "15s", "18s"],
-            "durations_label": "5s / 10s / 12s / 15s / 18s（v2.0 最长约 18 秒）",
+            "durations_label": "5s / 10s / 12s / 15s / 18s",
         }
 
     @staticmethod
@@ -1305,7 +1332,16 @@ class AgnesImagePlugin(Star):
         # 生视频指令支持 --model 选择模型（白名单校验）
         if video_model not in AGNES_VIDEO_MODELS:
             yield event.plain_result(
-                f"❌ --model 仅支持 {'/'.join(AGNES_VIDEO_MODELS)}，当前值：{video_model}"
+                f"❌ --model 仅支持 {'/'.join(m for m in AGNES_VIDEO_MODELS if m not in AGNES_VIDEO_MODELS_OFFLINE)}，当前值：{video_model}"
+            )
+            return
+        # 已下线模型拦截（官方公告：保留兼容但禁止调用，避免提交后取不到结果）
+        _offline = AGNES_VIDEO_MODELS_OFFLINE.get(video_model)
+        if _offline:
+            _alive = [m for m in AGNES_VIDEO_MODELS if m not in AGNES_VIDEO_MODELS_OFFLINE]
+            yield event.plain_result(
+                f"❌ 视频模型 {video_model} 已下线（{_offline}）\n"
+                f"请改用：{' / '.join(_alive)}"
             )
             return
         video_duration = opts.get("duration") or self.plugin_config.video_default_duration
@@ -1430,7 +1466,7 @@ class AgnesImagePlugin(Star):
     @filter.command("Agnes帮助")
     async def cmd_help(self, event: AstrMessageEvent):
         """查看帮助"""
-        help_text = """🎨 Agnes 图像与视频生成插件帮助 v2.3.4
+        help_text = """🎨 Agnes 图像与视频生成插件帮助 v2.3.5
 ━━━━━━━━━━━━
 🌸 核心指令：
 • 生图 <描述> - 生成图片
@@ -1440,8 +1476,8 @@ class AgnesImagePlugin(Star):
 
 💡 内联参数（直接跟在描述后）：
 • 尺寸1K/2K/4K (生图) - 指定分辨率档
-• 尺寸480p/720p/1080p/720P/960P/2K (生视频，按模型支持)
-• 时长5s/10s/12s/15s/18s (生视频，按模型支持)
+• 尺寸720P/1080P/2K (生视频，按模型支持)
+• 时长5s/10s/12s (生视频，按模型支持)
 • 比例1:1/16:9/4:3/3:2/9:16/4:5/5:4/21:9/3:4/2:3 - 长宽比
 • 质量高/中/低/自动 - 附加质量词
 • 模型agnes-video-2.5-flash / agnes-image-2.5-flash 等 - 指定具体模型（也可简写 flash / 2.5image）

@@ -22,7 +22,7 @@ class AgnesPluginConfig:
 
     # 视频相关配置
     video_model: str = "agnes-video-2.5-flash"
-    video_default_resolution: str = "720p"
+    video_default_resolution: str = "720P"
     video_default_aspect_ratio: str = "16:9"
     video_default_duration: str = "12s"
     video_output_format: str = "url"
@@ -63,7 +63,7 @@ class AgnesPluginConfig:
             request_timeout=cls._safe_int(config.get("request_timeout"), 300),
 
             video_model=str(config.get("video_model", "agnes-video-2.5-flash")).strip(),
-            video_default_resolution=str(config.get("video_default_resolution", "720p")).strip(),
+            video_default_resolution=str(config.get("video_default_resolution", "720P")).strip(),
             video_default_aspect_ratio=str(config.get("video_default_aspect_ratio", "16:9")).strip(),
             video_default_duration=str(config.get("video_default_duration", "12s")).strip(),
             video_output_format=str(config.get("video_output_format", "url")).strip(),

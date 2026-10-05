@@ -124,9 +124,8 @@
       "video_model": {
         "type": "string",
         "description": "默认生视频模型",
-        "hint": "选择默认视频生成模型。注意：agnes-video-2.5为付费模型",
+        "hint": "选择默认视频生成模型。注意：agnes-video-2.5 为付费模型",
         "options": [
-          "agnes-video-v2.0",
           "agnes-video-2.5-flash",
           "agnes-video-2.5"
         ],
@@ -135,16 +134,13 @@
       "video_default_resolution": {
         "type": "string",
         "description": "默认视频分辨率",
-        "hint": "选择默认视频分辨率档位。2.0支持480p/720p/1080p；2.5 flash只支持720p；2.5支持720P/960P/2K。",
+        "hint": "选择默认视频分辨率档位。2.5 flash 只支持 720P。",
         "options": [
-          "480p",
-          "720p",
           "720P",
-          "960P",
-          "1080p",
+          "1080P",
           "2K"
         ],
-        "default": "720p"
+        "default": "720P"
       },
       "video_default_aspect_ratio": {
         "type": "string",
@@ -163,13 +159,11 @@
       "video_default_duration": {
         "type": "string",
         "description": "默认视频时长",
-        "hint": "选择默认视频时长。2.5 系列最多支持12秒。时长越长，等待越久。",
+        "hint": "选择默认视频时长。时长越长，等待越久。",
         "options": [
           "5s",
           "10s",
-          "12s",
-          "15s",
-          "18s"
+          "12s"
         ],
         "default": "12s"
       },

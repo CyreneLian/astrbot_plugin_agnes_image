@@ -81,10 +81,8 @@ class ImageService:
             "agnes-image-2.5-flash": "agnes-image-2.5-flash",
             "2.5image": "agnes-image-2.5-flash",
             # 视频模型：具体名称 + 常用简写别名
-            "agnes-video-v2.0": "agnes-video-v2.0",
             "agnes-video-2.5-flash": "agnes-video-2.5-flash",
             "agnes-video-2.5": "agnes-video-2.5",
-            "v2.0": "agnes-video-v2.0",
             "2.5": "agnes-video-2.5",
             "2.5flash": "agnes-video-2.5-flash",
             "flash": "agnes-video-2.5-flash",

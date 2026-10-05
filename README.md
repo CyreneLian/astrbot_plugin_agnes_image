@@ -13,7 +13,7 @@
 
 - **文生图（Text-to-Image）**：根据自然语言描述直接生成图像（支持 `agnes-image-2.1-flash` / `agnes-image-2.5-flash` 生图模型）
 - **图生图（Image-to-Image）**：回复一张参考图后，附带描述对参考图进行修改；走 Agnes 原生 `extra_body.image` 通道（支持公网 URL 或 Data URI Base64）
-- **视频生成（Video Generation）**：支持 `agnes-video-v2.0` / `agnes-video-2.5-flash` / `agnes-video-2.5` 三种模型，支持纯文本生成视频，或带参考图生成视频（按参考图原比例或预设比例）。
+- **视频生成（Video Generation）**：支持 `agnes-video-2.5-flash` / `agnes-video-2.5` 两种模型，支持纯文本生成视频，或带参考图生成视频（按参考图原比例或预设比例）。
 
 ### 🚀 多种智能发送模式
 
@@ -23,8 +23,8 @@
 ### 🎛 丰富的参数控制
 
 - **生图分辨率档位**：`1K` / `2K` / `4K`（固定尺寸池下发，避免后端默默回退）
-- **视频分辨率档位**：v2.0 用 `480p` / `720p` / `1080p`；2.5 系列用 `720P` / `960P` / `2K`（2.5-flash 固定 `720P`）
-- **视频生成时长**：`5s` / `10s` / `12s` / `15s` / `18s`（2.5 系列支持 5s/10s/12s；15s/18s 仅 v2.0 支持）
+- **视频分辨率档位**：2.5 系列用 `720P` / `1080P` / `2K`（2.5-flash 固定 `720P`）
+- **视频生成时长**：`5s` / `10s` / `12s`（2.5 系列最长 12 秒）
 - **预设长宽比**：生图支持 10 种比例（如 `16:9`、`1:1`、`3:4` 等），视频支持 5 种比例（`16:9`、`9:16`、`1:1`、`4:3`、`3:4`），2.5 系列额外支持 `21:9`
 - **4 档图像质量**：`auto`（不附加）/ `low` / `medium` / `high`（仅生图）
 - **模型切换**：内联 `--model` 或 `模型2.1`/`模型flash` 可临时切换生图/生视频模型
@@ -42,7 +42,7 @@
 - **网络异常自动重试**：`ConnectionResetError` / `ClientPayloadError` / `ClientOSError` 最多自动重试 3 次（间隔 1 秒）
 - **请求成功重置计数器**：避免误统计历史重试
 - **配置可调超时**：`request_timeout` 默认 300 秒
-- **视频异步生成与状态轮询**：针对 Agnes 视频接口（`agnes-video-v2.0` / `agnes-video-2.5-flash` / `agnes-video-2.5`）采用异步任务制，插件在提交任务后，会优先使用推荐端点 `/agnesapi?video_id=<VIDEO_ID>` 进行 5 秒间隔的异步状态查询。当任务完成（`status: completed`）后，插件会自动精确解析 `metadata.url` 节点获取生成的视频，确保视频结果稳定送达。
+- **视频异步生成与状态轮询**：针对 Agnes 视频接口（`agnes-video-2.5-flash` / `agnes-video-2.5`）采用异步任务制，插件在提交任务后，会优先使用官方推荐端点 `/agnesapi?video_id=<VIDEO_ID>&model_name=<MODEL>` 进行 5 秒间隔的异步状态查询（端点返回 404 时自动回退到 `/videos/{task_id}`），等待 `queued` / `pending` / `processing` / `starting` / `running` / `in_progress` 等中间状态直至 `completed`。当任务完成后，插件会自动解析视频地址：官方端点返回顶层 `url`，兼容端点返回 `metadata.url`，两条路径自动适配，确保视频结果稳定送达。
 - **三道防线缓存清理**：
   - 发送成功 / 失败后立即清理临时文件
   - `try...finally` 异常路径兜底
@@ -103,11 +103,11 @@
 
 | 中文前缀 | 对应英文 | 支持的值 |
 | --- | --- | --- |
-| `尺寸` | `--res` | `1K`/`2K`/`4K`（生图），`480p`/`720p`/`1080p`/`720P`/`960P`/`2K`（视频，按模型支持） |
+| `尺寸` | `--res` | `1K`/`2K`/`4K`（生图），`720P`/`1080P`/`2K`（视频，按模型支持） |
 | `比例` | `--ratio` | `16:9`/`1:1`/`4:3` 等预设比例 |
-| `时长` | `--duration` | `5s`/`10s`/`12s`（2.5 系列），`5s`/`10s`/`12s`/`15s`/`18s`（v2.0） |
+| `时长` | `--duration` | `5s` / `10s` / `12s` |
 | `质量` | `--quality` | `高`/`中`/`低`/`自动` |
-| `模型` | `--model` | 生图：`2.1`/`2.5image`；视频：`v2.0`/`2.5`/`2.5flash`/`flash` |
+| `模型` | `--model` | 生图：`2.1`/`2.5image`；视频：`2.5`/`2.5flash`/`flash` |
 | `保留原比例` | `--keep-size` | （无值标志）图生图/视频时保留参考图比例 |
 
 > **提示**：插件完全向下兼容原有的 `--res`、`--ratio` 等英文参数格式。
@@ -124,7 +124,7 @@
 
 ### 💡 图生视频参考图传输方式配置推荐与原理
 
-图生图和图生视频的参考图输入规则并不完全相同：图生图走 Agnes 图像接口，插件可以将本地图片转换为 Data URI / Base64 后提交，因此通常可以正常读取本地图片；而图生视频走 Agnes 视频接口（`agnes-video-v2.0` / `agnes-video-2.5-flash` / `agnes-video-2.5`），官方文档要求图生视频、多图视频和关键帧动画使用可公网访问的图片 URL。
+图生图和图生视频的参考图输入规则并不完全相同：图生图走 Agnes 图像接口，插件可以将本地图片转换为 Data URI / Base64 后提交，因此通常可以正常读取本地图片；而图生视频走 Agnes 视频接口（`agnes-video-2.5-flash` / `agnes-video-2.5`），官方文档要求图生视频、多图视频和关键帧动画使用可公网访问的图片 URL。
 
 因此，下面的传输方式主要用于 **图生视频**：当用户在聊天软件（如 QQ）里发送本地图片时，插件需要先把这张参考图转换成 Agnes 视频接口能够访问的公网 URL。插件提供了三种转换方式，其原理与配置推荐如下：
 
@@ -238,7 +238,7 @@ astrbot_plugin_agnes_image/
 | `model` | 生图模型（默认 agnes-image-2.5-flash，可切换至其他 Agnes 生图模型） | `agnes-image-2.5-flash` |
 | `default_resolution` | 默认分辨率档位（`1K`/`2K`/`4K`） | `1K` |
 | `default_aspect_ratio` | 默认长宽比（支持 `1:1`/`16:9`/`9:16`/`4:3`/`3:2`/`21:9` 等 10 种预设） | `3:2` |
-| `default_quality` | 默认质量档（`auto`/`low`/`medium`/`high`，作为后缀附加到提示词） | `high` |
+| `default_quality` | 默认图像质量档，为当前模型附加质量参数（`auto` 不附加 / `low`/`medium`/`high`） | `high` |
 | `output_format` | 图片发送方式（`url` 直发零带宽 / `auto` 智能切换） | `url` |
 | `auto_threshold` | 图片智能切换文件大小阈值（单位 MB，当图片发送方式为 `auto` 时，小于该值走 base64、大于等于该值走 file；视频有独立阈值 `video_auto_threshold`） | `2` |
 | `keep_original_size` | 改图时按参考图原比例生图（自动匹配最接近的预设比例，可用命令行 `--keep-size` 临时覆盖） | `true` |
@@ -248,10 +248,10 @@ astrbot_plugin_agnes_image/
 
 | 字段 | 说明 | 默认值 |
 | --- | --- | --- |
-| `video_model` | 生视频模型（`agnes-video-v2.0` / `agnes-video-2.5-flash` / `agnes-video-2.5`，2.5 标准版收费） | `agnes-video-2.5-flash` |
-| `video_default_resolution` | 默认视频分辨率（v2.0 用 `480p`/`720p`/`1080p`；2.5 系列用 `720P`/`960P`/`2K`，2.5-flash 固定 `720P`） | `720p` |
-| `video_default_aspect_ratio` | 默认视频长宽比 | `16:9` |
-| `video_default_duration` | 默认视频时长（`5s`/`10s`/`12s`/`15s`/`18s`；2.5 系列支持 5s/10s/12s，15s/18s 仅 v2.0 支持） | `12s` |
+| `video_model` | 生视频模型（`agnes-video-2.5-flash` / `agnes-video-2.5`。注意：agnes-video-2.5 为付费模型） | `agnes-video-2.5-flash` |
+| `video_default_resolution` | 默认视频分辨率档位（2.5-flash 只支持 `720P`；2.5 支持 `720P`/`1080P`/`2K`） | `720P` |
+| `video_default_aspect_ratio` | 默认视频长宽比（`16:9`/`9:16`/`1:1`/`4:3`/`3:4`/`21:9` 共 6 种） | `16:9` |
+| `video_default_duration` | 默认视频时长（`5s` / `10s` / `12s`） | `12s` |
 | `video_output_format` | 视频发送方式（`url` 直发 / `auto` 智能切换） | `url` |
 | `video_auto_threshold` | 视频智能切换文件大小阈值（单位 MB，当视频发送方式为 `auto` 时，小于该值走 base64、大于等于该值走 file） | `2` |
 | `video_keep_original_size` | 图生视频时按参考图原比例生视频（自动匹配最接近的预设比例） | `true` |
@@ -294,7 +294,7 @@ astrbot_plugin_agnes_image/
 
 - **国内官方主页**：[agnes-ai.cn](https://agnes-ai.cn/) | **国际官方主页**：[agnes-ai.com](https://agnes-ai.com/)
 - **国内API 控制台**：[apihub.agnes-ai.cn](https://apihub.agnes-ai.cn/) | **国际API 控制台**：[apihub.agnes-ai.com](https://apihub.agnes-ai.com/)
-- **计费**：除了 Agnes Video 2.5 其它图像与视频模型当前免费；Agnes Video 2.5 标准版按输出时长计费（720P ¥0.15/秒、960P ¥0.25/秒、2K ¥0.35/秒）
+- **计费**：除了 Agnes Video 2.5 其它图像与视频模型当前免费；Agnes Video 2.5 标准版按输出时长计费（720P ¥0.15/秒、1080P ¥0.25/秒、2K ¥0.35/秒）
 
 ### API 节点地址
 
@@ -319,9 +319,8 @@ astrbot_plugin_agnes_image/
 
 | 模型 | 分辨率 | 长宽比 | 时长 |
 | :--- | :--- | :--- | :--- |
-| `agnes-video-v2.0` | `480p` / `720p` / `1080p` | `16:9` / `9:16` / `1:1` / `4:3` / `3:4` | `5s` / `10s` / `12s` / `15s` / `18s` |
 | `agnes-video-2.5-flash` | `720P` | `16:9` / `9:16` / `1:1` / `4:3` / `3:4` / `21:9` | `5s` / `10s` / `12s` |
-| `agnes-video-2.5` | `720P` / `960P` / `2K` | `16:9` / `9:16` / `1:1` / `4:3` / `3:4` / `21:9` | `5s` / `10s` / `12s` |
+| `agnes-video-2.5` | `720P` / `1080P` / `2K` | `16:9` / `9:16` / `1:1` / `4:3` / `3:4` / `21:9` | `5s` / `10s` / `12s` |
 ## 作者
 
 - 往昔的涟漪

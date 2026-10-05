@@ -608,12 +608,13 @@ class AgnesVideoRequestConfig:
 VIDEO_25_MODELS = {"agnes-video-2.5-flash", "agnes-video-2.5"}
 
 # 2.5 系列 resolution 档位映射（兼容旧版 480p/720p/1080p 写法）
+# 官方当前档位：720P / 1080P / 2K（960P 已下线，1K 固定方形未纳入）
 V25_SIZE_MAP = {
     "480p": "720P",
     "720p": "720P",
-    "1080p": "960P",
+    "1080p": "1080P",
     "720P": "720P",
-    "960P": "960P",
+    "1080P": "1080P",
     "2K": "2K",
 }
 # Flash 模型固定只支持 720P
@@ -634,6 +635,74 @@ V25_DURATION_MAP = {
 
 # 2.5 系列支持的画幅比（额外支持 21:9）
 V25_RATIOS = {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+
+
+def _pick_video_url(data: dict[str, Any]) -> str | None:
+    candidates = [
+        # Agnes-Video-V2.0 官方文档：completed 后最终视频 URL 位于 remixed_from_video_id
+        data.get("remixed_from_video_id"),
+        data.get("url"),
+        data.get("video_url"),
+        data.get("output_url"),
+        data.get("download_url"),
+        data.get("file_url"),
+        data.get("mp4_url"),
+    ]
+    # Agnes Video 2.5：文档标注 metadata.url，实测另在顶层 url 字段（已覆盖）
+    _meta = data.get("metadata")
+    if isinstance(_meta, dict):
+        candidates.append(_meta.get("url"))
+    output = data.get("output") or data.get("result") or data.get("data")
+    if isinstance(output, dict):
+        candidates.extend([
+            output.get("remixed_from_video_id"),
+            output.get("url"),
+            output.get("video_url"),
+            output.get("output_url"),
+            output.get("download_url"),
+            output.get("file_url"),
+            output.get("mp4_url"),
+        ])
+    if isinstance(output, list):
+        for item in output:
+            if isinstance(item, dict):
+                candidates.extend([
+                    item.get("remixed_from_video_id"),
+                    item.get("url"),
+                    item.get("video_url"),
+                    item.get("output_url"),
+                    item.get("download_url"),
+                    item.get("file_url"),
+                    item.get("mp4_url"),
+                ])
+            elif isinstance(item, str):
+                candidates.append(item)
+    for value in candidates:
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+    # 兜底：如果上面的字段都没命中，直接在整个 JSON 里找
+    raw_str = json.dumps(data)
+    import re
+    matches = re.findall(r'https?://[^"]+', raw_str)
+    for m in matches:
+        # 优先接受真实 mp4 文件地址。注意 platform-outputs.agnes-ai.space
+        # 域名本身包含 "agnes-ai"，不能用 "api" 子串粗暴过滤。
+        if ".mp4" in m:
+            return m
+    # 无 mp4 时才放宽：要求路径里出现 video 作为独立片段（避免 notvideo 之类误命中），
+    # 并排除回调/文档/API 等非视频资源
+    if not isinstance(data, dict):
+        return None
+    skip = ("webhook", "callback", "docs", "doc.", "api.", "/v1/", "help", "logo", "icon")
+    for m in matches:
+        low = m.lower()
+        if not re.search(r'(^|[/?&=._-])videos?([/?&=._-]|$)', low):
+            continue
+        if any(k in low for k in skip):
+            continue
+        return m
+    return None
+
 
 def _resolve_video_params(duration: str) -> dict[str, int]:
     # 根据官方文档，frame_rate 推荐 24，时长=num_frames/24
@@ -683,13 +752,13 @@ def _resolve_v25_size(model: str, res: str) -> str:
             f"分辨率档位不受 {model} 支持: {res}。"
             f"模型 {model} 支持的分辨率: 720P"
         )
-    # 2.5 标准版：只认原生档位，旧档位 480p/720p/1080p 不再自动映射
-    if res_norm in ("720P", "960P", "2K"):
-        return res
+    # 2.5 标准版：只认原生档位（720P / 1080P / 2K）
+    if res_norm in ("720P", "1080P", "2K"):
+        return res_norm
     raise ValueError(
         f"分辨率档位不受 {model} 支持: {res}。"
-        f"模型 {model} 支持的分辨率: 720P / 960P / 2K（请您使用 2.5 系列的档位写法，"
-        f"旧版 480p/720p/1080p 不再自动映射）"
+        f"模型 {model} 支持的分辨率: 720P / 1080P / 2K（请您使用 2.5 系列的档位写法，"
+        f"旧版 480p/720p/1080p 与已下线的 960P 均不再自动映射）"
     )
 
 
@@ -878,64 +947,6 @@ async def generate_video_task(config: AgnesVideoRequestConfig) -> tuple[str, flo
     last_error: Any = None
     last_resp_preview = ""
     last_poll_endpoint = poll_endpoints[0]
-    
-    def _pick_video_url(data: dict[str, Any]) -> str | None:
-        candidates = [
-            # Agnes-Video-V2.0 官方文档：completed 后最终视频 URL 位于 remixed_from_video_id
-            data.get("remixed_from_video_id"),
-            data.get("url"),
-            data.get("video_url"),
-            data.get("output_url"),
-            data.get("download_url"),
-            data.get("file_url"),
-            data.get("mp4_url"),
-        ]
-        # Agnes Video 2.5：文档标注 metadata.url，实测另在顶层 url 字段（已覆盖）
-        _meta = data.get("metadata")
-        if isinstance(_meta, dict):
-            candidates.append(_meta.get("url"))
-        output = data.get("output") or data.get("result") or data.get("data")
-        if isinstance(output, dict):
-            candidates.extend([
-                output.get("remixed_from_video_id"),
-                output.get("url"),
-                output.get("video_url"),
-                output.get("output_url"),
-                output.get("download_url"),
-                output.get("file_url"),
-                output.get("mp4_url"),
-            ])
-        if isinstance(output, list):
-            for item in output:
-                if isinstance(item, dict):
-                    candidates.extend([
-                        item.get("remixed_from_video_id"),
-                        item.get("url"),
-                        item.get("video_url"),
-                        item.get("output_url"),
-                        item.get("download_url"),
-                        item.get("file_url"),
-                        item.get("mp4_url"),
-                    ])
-                elif isinstance(item, str):
-                    candidates.append(item)
-        for value in candidates:
-            if isinstance(value, str) and value.startswith("http"):
-                return value
-                
-        # 兜底：如果上面的字段都没命中，直接在整个 JSON 里找
-        raw_str = json.dumps(data)
-        import re
-        # 简单粗暴的正则，匹配 http 开头直到双引号或结束
-        matches = re.findall(r'https?://[^"]+', raw_str)
-        for m in matches:
-            # 优先接受真实 mp4 文件地址。注意 platform-outputs.agnes-ai.space
-            # 域名本身包含 "agnes-ai"，不能用 "api" 子串粗暴过滤。
-            if ".mp4" in m:
-                return m
-            if "video" in m and "webhook" not in m:
-                return m
-        return None
     
     async with aiohttp.ClientSession() as session:
         while time.time() - start_time < max_wait:
