@@ -208,9 +208,9 @@
       },
       "video_enable_astrbot_file_magic": {
         "type": "bool",
-        "description": "是否开启 AstrBot 文件服务永久链接补丁",
+        "description": "（已废弃）AstrBot 文件服务旧补丁开关",
         "default": true,
-        "hint": "选择 AstrBot 自带文件服务需开启此选项并且重启 AstrBot，详见插件文档。"
+        "hint": "仅为兼容旧配置而保留，设置值已被忽略。更新插件后须重启整个 AstrBot 进程以清除旧补丁。"
       },
       "video_file_service_base_url": {
         "type": "string",

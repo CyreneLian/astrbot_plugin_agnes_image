@@ -30,6 +30,7 @@ class AgnesPluginConfig:
     video_request_timeout: int = 1000
     video_auto_threshold: int = 2
     video_img_handling_method: str = "astrbot"
+    # 已废弃：仅保留旧配置兼容，设置值不再生效。
     video_enable_astrbot_file_magic: bool = True
     video_file_service_base_url: str = ""
     third_party_upload_url: str = ""

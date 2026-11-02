@@ -132,7 +132,7 @@
    - **原理**：直接利用 AstrBot 内置的文件服务将本地图片注册为一个临时下载链接（如 `http://你的IP:6185/api/file/xxx`），再把该链接交给 Agnes 视频接口读取。
    - **优点**：**速度极快**（本地直接生成链接，无需上传至外部服务器），**安全性极高**（图片数据完全保留在自己的服务器上，不经过任何第三方图床，避免隐私泄露）。
    - **缺点**：需要你的 AstrBot 面板支持公网访问，且需要正确配置 `video_file_service_base_url`（或全局的 `callback_api_base`）。
-   - **⚠️ 注意**：选用此方式时，**务必开启**“是否开启 AstrBot 文件服务永久链接补丁”并**重启 AstrBot**，以防 Agnes 视频接口因排队多次拉取而报 404 错误。
+   - **⚠️ 注意**：参考图链接是否支持重复下载取决于 AstrBot 文件服务版本，详见下方临时链接说明。
 
 2. **免费公网图床 (`free_public`)**
    - **原理**：插件自动将图片上传至 Telegraph 或 Catbox 免费图床，生成公网图片 URL 后交给 Agnes 视频接口读取。
@@ -144,16 +144,13 @@
    - **优点**：适合有稳定图床资源的用户。
    - **缺点**：需要额外配置上传 API 地址和 Key，且第三方接口失效时会回退到免费图床。
 
-### 💡 AstrBot 文件服务永久链接补丁说明
+### 💡 AstrBot 文件服务临时链接说明
 
-当本地图片传输方式选择 `astrbot`（使用 AstrBot 自带文件服务）时，插件需要将本地图片注册为 AstrBot 的临时下载链接提供给 Agnes 视频 API 进行下载。
+当图生视频的本地参考图传输方式选择 `astrbot` 时，插件通过 AstrBot 文件服务注册临时下载链接，并交给 Agnes 视频 API。支持 `single_use` 参数的 AstrBot（如 4.29.4）会为本插件参考图创建有效期内可重复访问的 token；有效期仍由 AstrBot 文件服务决定，链接并非永久有效。其他文件 token 保持 AstrBot 原有的使用规则。
 
-**为什么要开启此补丁？**
-AstrBot 底层自带的文件服务生成的 Token 是极其严格的 **一次性链接**。只要这个链接被任何程序访问了一次，它就会在毫秒内立刻销毁。而 Agnes 的视频生成 API 在接收到任务时，会先发起一次轻量级的预检请求来验证图片链接的有效性。这会导致一次性 Token 被提前消耗掉。随后，当视频生成的后台核心程序真正去下载图片时，由于链接已经失效，就会遭遇 404 报错。
+旧版 AstrBot 如果不支持 `single_use`，插件会使用旧的注册接口；该接口的链接不保证可重复下载，预检或重试可能导致后续下载返回 404。若遇到此问题，可升级 AstrBot，或改用图床传输方式。无法检测注册接口签名时，插件也会保守地使用旧接口。
 
-开启 **“AstrBot 文件服务永久链接补丁”** 后，插件会使用 Monkey Patch 动态拦截并改写 AstrBot 的文件 Token 注册服务，将生成的文件链接有效期延长至 **5 分钟**（并非永久，但足够视频 API 完成下载），从而彻底解决 404 报错。
-
-⚠️ **注意**：开启或关闭此补丁后，**必须重启整个 AstrBot 进程**以使补丁生效（因为热重载无法重置已被动态 Patch 写入 Python 内存的模块）。
+旧配置项 `video_enable_astrbot_file_magic` 已废弃，仅为兼容旧配置保留，其设置值会被忽略。**从使用过旧补丁的版本更新后，必须重启整个 AstrBot 进程**：仅热重载插件无法清除已留在进程内存中的旧全局补丁。
 
 ## 适配细节
 
@@ -201,6 +198,7 @@ astrbot_plugin_agnes_image/
 ├── napcat_stream.py     # NapCat Stream API 分块流式上传兜底发送逻辑
 ├── core/
 │   ├── __init__.py
+│   ├── file_tokens.py   # 参考图文件 token 注册与旧版接口兼容
 │   ├── image_service.py # 图像服务：参数解析、尺寸匹配与参考图提取
 │   ├── video_service.py # 视频服务：后台任务异步轮询与结果分流发送
 │   └── uploader.py      # 上传器：本地临时图片复制、图床及文件服务转换
@@ -257,7 +255,7 @@ astrbot_plugin_agnes_image/
 | `video_keep_original_size` | 图生视频时按参考图原比例生视频（自动匹配最接近的预设比例） | `true` |
 | `video_request_timeout` | 视频生成及状态轮询的最大超时时间（秒） | `1000` |
 | `video_img_handling_method` | 图生视频本地参考图传输方式（`astrbot`/`third_party`/`free_public`） | `astrbot` |
-| `video_enable_astrbot_file_magic` | 是否开启 AstrBot 文件服务永久链接补丁 | `true` |
+| `video_enable_astrbot_file_magic` | 已废弃；仅保留旧配置兼容，设置值被忽略 | `true` |
 | `video_file_service_base_url` | AstrBot 本地文件服务公网访问地址（面板外网地址，如 `http://IP:6185`） | （空） |
 | `third_party_upload_url` | 第三方图床 API 地址 | （空） |
 | `third_party_token` | 第三方图床 Key | （空） |

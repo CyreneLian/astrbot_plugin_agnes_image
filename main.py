@@ -31,6 +31,7 @@ from astrbot.core import astrbot_config
 from .models.config import AgnesPluginConfig
 from .core.image_service import ImageService
 from .core.video_service import VideoService
+from .core.file_tokens import register_reference_file
 from .core.uploader import Uploader, DirectUrlImage
 from .agnes_api import (
     AgnesAPIError,
@@ -70,14 +71,11 @@ _CACHE_SUBDIR = "cache"
 # 启动时清理超过 1 小时的临时文件
 _CACHE_MAX_AGE_SECONDS = 3600
 
-# 补丁状态
-_AGNES_FILE_SERVICE_MAGIC_PATCHED = False
-
 @register(
     "astrbot_plugin_agnes_image",
     "往昔的涟漪",
     "Agnes AI 图像与视频生成插件，依据 Agnes 官方文档进行了原生适配以实现完全免费、较高质量的定制化生成体验，支持文生图、图生图以及视频生成。",
-    "2.3.5",
+    "2.3.6",
     "https://github.com/CyreneLian/astrbot_plugin_agnes_image",
 )
 class AgnesImagePlugin(Star):
@@ -117,54 +115,6 @@ class AgnesImagePlugin(Star):
 
     # ===== 生命周期 =====
 
-    def _install_astrbot_file_service_magic(self):
-        """让 AstrBot 文件服务 token 在有效期内可重复访问。"""
-        global _AGNES_FILE_SERVICE_MAGIC_PATCHED
-
-        if _AGNES_FILE_SERVICE_MAGIC_PATCHED:
-            logger.info("[agnes] AstrBot 文件服务可重复访问补丁已安装，跳过重复安装")
-            return
-
-        if not self.plugin_config.video_enable_astrbot_file_magic:
-            logger.info("[agnes] AstrBot 文件服务可重复访问补丁未启用")
-            return
-
-        try:
-            from astrbot.core import file_token_service
-
-            if getattr(file_token_service, "_agnes_magic_patched", False):
-                _AGNES_FILE_SERVICE_MAGIC_PATCHED = True
-                logger.info("[agnes] AstrBot 文件服务可重复访问补丁已存在")
-                return
-
-            original_handle_file = file_token_service.handle_file
-
-            async def agnes_repeatable_handle_file(file_token: str) -> str:
-                async with file_token_service.lock:
-                    await file_token_service._cleanup_expired_tokens()
-
-                    if file_token not in file_token_service.staged_files:
-                        raise KeyError(f"无效或过期的文件 token: {file_token}")
-
-                    file_path, expire_time = file_token_service.staged_files[file_token]
-                    if time.time() > expire_time:
-                        file_token_service.staged_files.pop(file_token, None)
-                        raise KeyError(f"无效或过期的文件 token: {file_token}")
-
-                    if not os.path.exists(file_path):
-                        file_token_service.staged_files.pop(file_token, None)
-                        raise FileNotFoundError(f"文件不存在: {file_path}")
-
-                    return file_path
-
-            file_token_service._agnes_original_handle_file = original_handle_file
-            file_token_service.handle_file = agnes_repeatable_handle_file
-            file_token_service._agnes_magic_patched = True
-            _AGNES_FILE_SERVICE_MAGIC_PATCHED = True
-            logger.info("[agnes] 已安装 AstrBot 文件服务可重复访问补丁：/api/file token 有效期内不会因首次访问失效")
-        except Exception as e:
-            logger.error(f"[agnes] 安装 AstrBot 文件服务可重复访问补丁失败: {e}", exc_info=True)
-
     async def initialize(self):
         """插件加载：准备 cache 目录并清理历史临时文件。"""
         try:
@@ -182,7 +132,6 @@ class AgnesImagePlugin(Star):
         
         self._purge_stale_cache()
         logger.info(f"[agnes] cache 目录就绪: {self._cache_dir}")
-        self._install_astrbot_file_service_magic()
 
     async def terminate(self):
         """插件卸载：关闭长连接 session。"""
@@ -319,7 +268,7 @@ class AgnesImagePlugin(Star):
                         shutil.copy2(file_path, safe_file_path)
                         
                         from astrbot.core import file_token_service
-                        token = await file_token_service.register_file(str(safe_file_path))
+                        token = await register_reference_file(file_token_service, str(safe_file_path))
 
                         base_url = self.plugin_config.video_file_service_base_url.rstrip("/")
                         if not base_url:
@@ -1466,7 +1415,7 @@ class AgnesImagePlugin(Star):
     @filter.command("Agnes帮助")
     async def cmd_help(self, event: AstrMessageEvent):
         """查看帮助"""
-        help_text = """🎨 Agnes 图像与视频生成插件帮助 v2.3.5
+        help_text = """🎨 Agnes 图像与视频生成插件帮助 v2.3.6
 ━━━━━━━━━━━━
 🌸 核心指令：
 • 生图 <描述> - 生成图片
